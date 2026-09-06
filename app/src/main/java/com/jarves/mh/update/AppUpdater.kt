@@ -19,16 +19,30 @@ data class AppUpdateInfo(
     val notes: String,
 )
 
-class AppUpdater(private val context: Context) {
+class AppUpdater(
+    private val context: Context,
+    /**
+     * Optional manifest URL override. When non-empty, used in place of
+     * [BuildConfig.APP_UPDATE_MANIFEST_URL]. Debug builds populate this
+     * from Settings → Update channel so the update flow can be exercised
+     * end-to-end against a Cloudflare Tunnel or ngrok HTTPS URL without
+     * publishing a release to GitHub.
+     */
+    private val manifestUrlOverride: String = "",
+) {
     fun check(): AppUpdateInfo? {
-        val connection = URL(BuildConfig.APP_UPDATE_MANIFEST_URL).openConnection() as HttpURLConnection
+        val manifestUrl = manifestUrlOverride.ifBlank { BuildConfig.APP_UPDATE_MANIFEST_URL }
+        if (!manifestUrl.startsWith("https://")) return null
+        val connection = URL(manifestUrl).openConnection() as HttpURLConnection
         return try {
             connection.connectTimeout = 8_000
             connection.readTimeout = 10_000
             connection.instanceFollowRedirects = true
             connection.setRequestProperty("Accept", "application/json")
-            if (connection.responseCode !in 200..299) return null
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            val code = connection.responseCode
+            if (code !in 200..299) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val root = JSONObject(body)
             val versionCode = root.optLong("versionCode")
             if (versionCode <= BuildConfig.VERSION_CODE) return null
             val artifact = root.optJSONObject("artifacts")?.optJSONObject(BuildConfig.APP_VARIANT)

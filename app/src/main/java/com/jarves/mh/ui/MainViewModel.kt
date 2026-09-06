@@ -162,7 +162,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val runtime = ClaudeRuntimeBridge(application) { profile -> vault.get(profile.kind.name) }
     private val installer = RuntimeInstaller(application)
     private val providerApi = ProviderApiClient()
-    private val appUpdater = AppUpdater(application)
+    private fun appUpdater(): AppUpdater = AppUpdater(
+        getApplication(),
+        if (BuildConfig.DEBUG) preferences.debugUpdateManifestUrl else "",
+    )
     @Volatile private var projectTerminalProcess: Process? = null
     @Volatile private var terminalProcess: Process? = null
     @Volatile private var projectTerminalProjectId: String? = null
@@ -923,7 +926,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun checkForAppUpdate(force: Boolean = false) {
         if (!force && System.currentTimeMillis() - preferences.lastAppUpdateCheckMillis < 24L * 60L * 60L * 1000L) return
         viewModelScope.launch(Dispatchers.IO) {
-            val update = runCatching { appUpdater.check() }.getOrNull()
+            val update = runCatching { appUpdater().check() }.getOrNull()
             preferences.lastAppUpdateCheckMillis = System.currentTimeMillis()
             if (update != null) {
                 _state.update {
@@ -932,6 +935,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    /** Debug builds only: persist a manifest URL override and re-check immediately. */
+    fun setDebugUpdateManifestUrl(url: String) {
+        if (!BuildConfig.DEBUG) return
+        preferences.debugUpdateManifestUrl = url.trim()
+        preferences.lastAppUpdateCheckMillis = 0L
+        checkForAppUpdate(force = true)
+    }
+
+    /** Debug builds only: clear the manifest URL override and re-check the default channel. */
+    fun clearDebugUpdateManifestUrl() {
+        if (!BuildConfig.DEBUG) return
+        preferences.debugUpdateManifestUrl = ""
+        preferences.lastAppUpdateCheckMillis = 0L
+        checkForAppUpdate(force = true)
+    }
+
+    /** Debug builds only: the currently-active manifest URL override (empty = default). */
+    fun debugUpdateManifestUrl(): String = if (BuildConfig.DEBUG) preferences.debugUpdateManifestUrl else ""
 
     fun installAppUpdate() {
         val info = _state.value.appUpdate ?: return
@@ -945,7 +967,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                appUpdater.download(info) { downloaded, total ->
+                appUpdater().download(info) { downloaded, total ->
                     _state.update { current -> current.copy(appUpdateDownloadedBytes = downloaded, appUpdateTotalBytes = total) }
                 }
             }.onSuccess { apk ->

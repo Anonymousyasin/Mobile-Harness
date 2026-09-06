@@ -94,7 +94,7 @@ import com.jarves.mh.ui.theme.AppThemeMode
 import com.jarves.mh.ui.theme.PocketOrange
 import kotlinx.coroutines.launch
 
-private enum class SettingsSection { CONNECTION, APPEARANCE, TOOLS, RUNTIME }
+private enum class SettingsSection { CONNECTION, APPEARANCE, TOOLS, RUNTIME, UPDATE_CHANNEL }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,6 +108,9 @@ fun SettingsScreen(
     onClearTerminal: () -> Unit,
     getSavedApiKey: (ProviderKind) -> String,
     onInstallDevStack: (DevStack) -> Unit = {},
+    initialDebugUpdateManifestUrl: String = "",
+    onSetDebugUpdateManifestUrl: (String) -> Unit = {},
+    onClearDebugUpdateManifestUrl: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -418,6 +421,16 @@ fun SettingsScreen(
                 }
             }
 
+            if (BuildConfig.DEBUG) {
+                item {
+                    DebugUpdateChannelSection(
+                        initialUrl = initialDebugUpdateManifestUrl,
+                        onSave = onSetDebugUpdateManifestUrl,
+                        onClear = onClearDebugUpdateManifestUrl,
+                    )
+                }
+            }
+
             item {
                 Surface(
                     color = Color.Transparent,
@@ -650,5 +663,67 @@ private fun RuntimeInfoRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         Text(value, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun DebugUpdateChannelSection(
+    initialUrl: String,
+    onSave: (String) -> Unit,
+    onClear: () -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    var url by rememberSaveable(initialUrl) { mutableStateOf(initialUrl) }
+    val isOverridden = initialUrl.isNotBlank()
+    SettingsAccordion(
+        title = "Update channel",
+        subtitle = if (isOverridden) "Overridden · debug only" else "Default GitHub release",
+        icon = Icons.Default.Tune,
+        expanded = expanded,
+        onClick = { expanded = !expanded },
+    ) {
+        Text(
+            "Debug builds only. Paste the temporary manifest URL from Cloudflare Tunnel, ngrok, or any HTTPS server hosting mobile-harness-update.json and a newer APK.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it },
+            label = { Text("Manifest URL") },
+            placeholder = { Text("https://your-tunnel.example/mobile-harness-update.json") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = { onSave(url) },
+                enabled = url.startsWith("https://"),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (isOverridden) "Replace" else "Use & check")
+            }
+            OutlinedButton(
+                onClick = onClear,
+                enabled = isOverridden,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Reset")
+            }
+        }
+        if (isOverridden) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Current: $initialUrl",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

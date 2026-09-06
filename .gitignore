@@ -61,3 +61,6 @@ captures/
 dist/runtime-bundles/*.tar.zst
 dist/runtime-bundles/*.invalid
 dist/runtime-bundles/sources/
+
+# Generated local in-app update test artifacts.
+dist/update-test/

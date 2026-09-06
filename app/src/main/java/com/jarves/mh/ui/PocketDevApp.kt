@@ -1526,6 +1526,9 @@ private fun RootScreenHost(
                     onClearTerminal = viewModel::clearTerminal,
                     getSavedApiKey = viewModel::getSavedApiKey,
                     onInstallDevStack = viewModel::installDevStack,
+                    initialDebugUpdateManifestUrl = viewModel.debugUpdateManifestUrl(),
+                    onSetDebugUpdateManifestUrl = viewModel::setDebugUpdateManifestUrl,
+                    onClearDebugUpdateManifestUrl = viewModel::clearDebugUpdateManifestUrl,
                 )
             }
         }

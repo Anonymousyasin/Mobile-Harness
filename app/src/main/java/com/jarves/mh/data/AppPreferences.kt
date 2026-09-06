@@ -45,6 +45,15 @@ class AppPreferences(private val context: Context) {
         get() = preferences.getLong("last_app_update_check_millis", 0L)
         set(value) { preferences.edit().putLong("last_app_update_check_millis", value).apply() }
 
+    /**
+     * Debug-only manifest URL override. Empty in release builds; populated via
+     * Settings → Update channel in debug builds so a local server (exposed via
+     * Cloudflare Tunnel or ngrok) can be tested without publishing a release.
+     */
+    var debugUpdateManifestUrl: String
+        get() = preferences.getString("debug_update_manifest_url", "") ?: ""
+        set(value) { preferences.edit().putString("debug_update_manifest_url", value).apply() }
+
     /** Development stacks the user picked during onboarding (names of DevStack). */
     var selectedDevStacks: Set<String>
         get() {
