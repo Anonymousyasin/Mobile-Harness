@@ -70,10 +70,11 @@ class RuntimeInstaller(private val context: Context) {
         val legacyLanguageTools = languageToolsMarker.readTextOrNull() == LANGUAGE_TOOLS_VERSION
         val coreToolsReady = File(rootfs, "usr/bin/git").exists() &&
             coreToolsMarker.readTextOrNull() == CORE_TOOLS_VERSION
+        val pi = File(rootfs, "usr/bin/pi")
         val ready = proot.canExecute() &&
             File(rootfs, "usr/bin/bash").exists() &&
             rootfsMarker.readTextOrNull() == ROOTFS_VERSION &&
-            File(rootfs, "usr/local/bin/claude").exists() &&
+            (pi.isFile || File(rootfs, "usr/local/bin/claude").exists()) &&
             File(rootfs, "usr/local/bin/node").exists() &&
             (legacyLanguageTools || coreToolsReady) &&
             marker.exists()
@@ -134,7 +135,7 @@ class RuntimeInstaller(private val context: Context) {
         selectedStacks: Set<DevStack> = emptySet(),
         onProgress: suspend (RuntimeInstallProgress) -> Unit,
     ): InstalledRuntime {
-        require(android.os.Build.SUPPORTED_ABIS.contains("arm64-v8a")) { "Pocket runtime requires an ARM64 device" }
+        require(android.os.Build.SUPPORTED_ABIS.contains("arm64-v8a") || android.os.Build.SUPPORTED_ABIS.contains("armeabi-v7a")) { "Pocket runtime requires ARM64 or ARM32 device" }
         val proot = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
         require(proot.canExecute()) { "The embedded PRoot launcher is unavailable" }
 
@@ -154,7 +155,7 @@ class RuntimeInstaller(private val context: Context) {
             extractZstdTar(archive, staging)
             stripMacosMetadataArtifacts(staging)
             require(File(staging, "usr/bin/bash").isFile) { "Core bundle is missing Bash" }
-            require(File(staging, "usr/local/bin/claude").isFile) { "Core bundle is missing Claude Code" }
+            require(File(staging, "usr/bin/pi").isFile || File(staging, "usr/local/bin/claude").isFile) { "Core bundle is missing agent binary (pi/claude)" }
             rootfs.deleteRecursively()
             check(staging.renameTo(rootfs)) { "Could not activate the Linux environment" }
             writeResolver()
