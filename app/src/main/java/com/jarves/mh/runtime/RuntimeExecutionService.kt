@@ -43,7 +43,7 @@ class RuntimeExecutionService : Service() {
                 // Live step updates only matter while a task is actually running.
                 if (!taskRunning) return START_NOT_STICKY
                 val detail = intent?.getStringExtra(EXTRA_DETAIL)?.takeIf { it.isNotBlank() }
-                    ?: "Claude Code is working in $projectName"
+                    ?: "Pi Agent is working in $projectName"
                 getSystemService(NotificationManager::class.java).notify(
                     RUNNING_NOTIFICATION_ID,
                     runningNotification(detail, includeStop = true),
@@ -69,7 +69,7 @@ class RuntimeExecutionService : Service() {
                 taskRunning = true
                 startForeground(
                     RUNNING_NOTIFICATION_ID,
-                    runningNotification("Claude Code is working in $projectName", includeStop = true),
+                    runningNotification("Pi Agent is working in $projectName", includeStop = true),
                 )
                 acquireWakeLock()
             }
