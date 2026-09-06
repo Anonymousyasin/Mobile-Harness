@@ -6,18 +6,20 @@
 
   ### *The complete autonomous AI development workspace for Android.*
 
-  **Chat with coding agents, edit projects, execute real Linux commands, inspect diffs, and preview live web servers — all directly on your phone.**
+  **Chat with coding agents, edit projects, execute real Linux commands, and preview live web servers — all directly on your phone.**
 
   <br />
 
-  [![Release](https://img.shields.io/github/v/release/techjarves/Mobile-Harness?style=for-the-badge&color=161b22&labelColor=0d1117&logo=github)](https://github.com/techjarves/Mobile-Harness/releases/latest)
-  [![Platform](https://img.shields.io/badge/Platform-Android_9%2B-161b22?style=for-the-badge&logo=android&logoColor=3DDC84&labelColor=0d1117)](#system-requirements)
-  [![License](https://img.shields.io/badge/License-MIT-161b22?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=0d1117)](LICENSE)
-  [![YouTube](https://img.shields.io/badge/Demo-Tech_Jarves-161b22?style=for-the-badge&logo=youtube&logoColor=FF0000&labelColor=0d1117)](https://www.youtube.com/techjarves)
+  [![Release v1.0.3](https://img.shields.io/badge/Release-v1.0.3-F28C52?style=flat-square&logo=github&logoColor=white)](https://github.com/techjarves/Mobile-Harness/releases/tag/v1.0.3)
+  [![Android 9+](https://img.shields.io/badge/Android-9%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](#system-requirements)
+  [![ARM64](https://img.shields.io/badge/CPU-ARM64-5B8DEF?style=flat-square)](#system-requirements)
+  [![MIT License](https://img.shields.io/badge/License-MIT-8B7CF6?style=flat-square&logo=opensourceinitiative&logoColor=white)](LICENSE)
+  [![Watch demo](https://img.shields.io/badge/Watch-Demo-FF0000?style=flat-square&logo=youtube&logoColor=white)](https://www.youtube.com/techjarves)
 
   <br />
 
-  [**Download Latest APK (v1.0.3)**](https://github.com/techjarves/Mobile-Harness/releases/latest) &nbsp;•&nbsp;
+  [**Download Online APK**](https://github.com/techjarves/Mobile-Harness/releases/download/v1.0.3/mobile-harness-online-v1.0.3.apk) &nbsp;•&nbsp;
+  [**Download Offline APK**](https://github.com/techjarves/Mobile-Harness/releases/download/v1.0.3/mobile-harness-offline-v1.0.3.apk) &nbsp;•&nbsp;
   [**Watch Walkthrough (3 min)**](https://youtu.be/QzAau52Z7yQ) &nbsp;•&nbsp;
   [**Quickstart Guide**](#quickstart) &nbsp;•&nbsp;
   [**Architecture**](#architecture) &nbsp;•&nbsp;
@@ -44,6 +46,41 @@
 > [!IMPORTANT]
 > **Environment Security Notice**  
 > Mobile Harness runs on **ARM64 Android devices** using a private userspace PRoot layer. While isolated from other apps via standard Android sandbox permissions, PRoot is not a virtualization boundary or hardened security jail. Only execute projects and dependencies you own or trust.
+
+<br />
+
+## Download Mobile Harness
+
+<div align="center">
+  <h3>Choose the edition that fits your setup</h3>
+  <p>Both editions contain the complete Mobile Harness app and support secure in-app updates beginning with v1.0.3.</p>
+</div>
+
+<table>
+  <tr>
+    <td width="50%" valign="top" align="center">
+      <h3>Online Edition</h3>
+      <p><strong>44.6 MB · Recommended</strong></p>
+      <p>Start with the smaller APK. Core, Python, and Android runtime bundles are downloaded only when needed.</p>
+      <a href="https://github.com/techjarves/Mobile-Harness/releases/download/v1.0.3/mobile-harness-online-v1.0.3.apk">
+        <img src="https://img.shields.io/badge/Download-Online_APK-F28C52?style=for-the-badge&logo=android&logoColor=white" alt="Download Online APK" />
+      </a>
+    </td>
+    <td width="50%" valign="top" align="center">
+      <h3>Offline Edition</h3>
+      <p><strong>818.5 MB · Everything included</strong></p>
+      <p>Includes the Core, Python, and Android runtime bundles for setup with limited or unavailable internet.</p>
+      <a href="https://github.com/techjarves/Mobile-Harness/releases/download/v1.0.3/mobile-harness-offline-v1.0.3.apk">
+        <img src="https://img.shields.io/badge/Download-Offline_APK-5B8DEF?style=for-the-badge&logo=android&logoColor=white" alt="Download Offline APK" />
+      </a>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <strong>ARM64 Android 9+</strong><br />
+  <sub>Direct APK installation · No root required · No USB or wireless ADB pairing</sub>
+</p>
 
 <br />
 
@@ -74,8 +111,8 @@ Mobile Harness unites modern **Jetpack Compose UI** with a self-contained **Ubun
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <h3>Safe Iteration & Checkpoints</h3>
-      <p>Review rich visual diffs of agent-authored code. Accept changes, roll back broken states, or branch checkpoints before testing complex edits.</p>
+      <h3>Persistent Project Sessions</h3>
+      <p>Keep projects, chat history, files, and task context together so work can continue across app sessions.</p>
     </td>
     <td width="50%" valign="top">
       <h3>Native File Workflow</h3>
@@ -327,7 +364,7 @@ Mobile-Harness/
 ├── app/src/main/
 │   ├── java/com/jarves/mh/
 │   │   ├── data/       # Preferences, Keystore AES encryption, SQLite persistence
-│   │   ├── model/      # Data entities: Projects, Chats, Diffs, Tool calls
+│   │   ├── model/      # Data entities: Projects, Chats, Files, Tool calls
 │   │   ├── runtime/    # PRoot installer, C++ agent bridge, foreground services
 │   │   └── ui/         # Jetpack Compose screens, Material 3 theme, ViewModels
 │   ├── cpp/            # Native C++ launcher, pseudo-terminal pipe handler
