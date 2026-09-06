@@ -6,30 +6,44 @@ on:
     branches: [main]
 
 jobs:
-  build-android:
+  build-apk:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           ref: main
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: 17
           distribution: temurin
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
           path: ~/.gradle/caches
           key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-
+
+      - name: Download Pi agent binary (ARM64 + ARM32)
+        run: |
+          mkdir -p app/src/main/assets/pi/
+          # Pi v0.85.1 - ARM64 Linux binary
+          curl -sL "https://github.com/earendil-works/pi/releases/download/v0.85.1/pi-linux-arm64.tar.gz" \
+            -o pi-linux-arm64.tar.gz
+          echo "Downloaded ARM64 Pi binary"
+
       - name: Make gradlew executable
         run: chmod +x ./gradlew
+
       - name: Build debug APK (ARM32 + Pi agent)
         run: ./gradlew assembleDebug
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
