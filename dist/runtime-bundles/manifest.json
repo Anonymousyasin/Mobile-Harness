@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "architecture": "arm64",
+  "minimumAndroidApi": 26,
+  "bundles": {
+    "core": {
+      "version": "2026.09.4",
+      "file": "pocketdev-core-arm64-2026.09.4.tar.zst",
+      "sha256": "6b60d21c3441fe0b127baadded253371fa585525e60871fb814ca29b4fed0de0",
+      "compressedBytes": 148844879,
+      "uncompressedBytes": 584540160,
+      "base": "Ubuntu 20.04.5 ARM64",
+      "includes": [
+        "Node.js 24.19.0",
+        "npm 11.17.0",
+        "Git 2.25.1",
+        "Claude Code 2.1.261 ARM64",
+        "No optional language stacks"
+      ]
+    },
+    "python": {
+      "version": "2026.09.2",
+      "file": "pocketdev-python-arm64-2026.09.2.tar.zst",
+      "sha256": "6b3f56f7743fec142bc045db3ea561ee83fe89af87c2799165ef60351164ef85",
+      "compressedBytes": 55419626,
+      "uncompressedBytes": 42127360,
+      "includes": ["Python 3", "pip", "venv", "build tools"]
+    },
+    "android": {
+      "version": "2026.09.1",
+      "file": "pocketdev-android-arm64-2026.09.1.tar.zst",
+      "sha256": "01bea058ebcb17416d1eb08c0211b3782da3228eb3c8348eb3719f2d61dd3ec6",
+      "compressedBytes": 569652007,
+      "uncompressedBytes": 866703360,
+      "includes": [
+        "Temurin OpenJDK 17.0.20.1 ARM64",
+        "Android SDK 36",
+        "Android Build Tools 35.0.0 ARM64",
+        "Gradle 8.14.3",
+        "Offline Maven repository",
+        "Global ARM64 AAPT2 override"
+      ]
+    }
+  }
+}

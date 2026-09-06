@@ -30,6 +30,7 @@ The app currently provides:
 - A collapsible file browser and local attachment storage
 - File diffs, task checkpoints, and rollback controls
 - A browser-style preview for local web servers
+- On-device Android APK builds, installation, and launch without ADB pairing
 - Guided runtime installation with live logs and recovery
 - Configurable Anthropic-compatible model providers
 
@@ -69,7 +70,7 @@ The first setup can take 10–12 minutes depending on the device and network. A 
 
 ## Runtime and toolchains
 
-The core setup includes:
+The runtime setup includes:
 
 - Ubuntu 20.04 ARM64 root filesystem
 - Claude Code CLI, downloaded from Anthropic's official distribution endpoint
@@ -81,12 +82,14 @@ Optional toolchains can be selected during setup or managed later:
 | Toolchain | Included tools |
 | --- | --- |
 | **Web** | Node.js, npm, JavaScript, and TypeScript workflows |
-| **Python** | Python 3, pip, venv, and build essentials |
-| **Android** | OpenJDK and Kotlin-oriented build tools |
+| **Python** | Optional Python 3, pip, venv, and build essentials |
+| **Android** | JDK 17, ARM64 Android SDK 36, Build Tools 35, Gradle 8.14.3, and an offline Maven cache |
 | **C / C++** | GCC, G++, Make, CMake, and GDB |
 | **PHP** | PHP CLI and Composer |
 
 Docker, systemd, nested containers, kernel modules, Android emulators, and workflows requiring real root are outside the supported scope.
+
+When Android is selected during onboarding, Mobile Harness installs that complete toolchain into its private Ubuntu environment. Android projects can then be built with the workspace play button. The resulting debug APK is passed directly to Android's system package installer and launched after installation; USB debugging, wireless debugging, an ADB port, and a pairing code are not required. Android still requires the user to allow installs from Mobile Harness and confirm each installation.
 
 ## AI providers
 
@@ -111,7 +114,7 @@ Mobile Harness does not offer Claude.ai subscription login in public third-party
 | **Android** | Android 9 (API 28) | Android 13 or newer |
 | **Architecture** | ARM64 (`arm64-v8a`) | ARM64 |
 | **Memory** | 4 GB RAM | 8 GB RAM |
-| **Storage** | 2 GB free for the core runtime | More space for projects and optional toolchains |
+| **Storage** | Core runtime storage | More space for projects and optional toolchains |
 | **Network** | Required for initial setup and AI access | Stable Wi-Fi for setup |
 
 32-bit Android devices are not supported. Android may still stop long-running or memory-intensive work despite foreground execution and wake-lock safeguards.
@@ -196,10 +199,11 @@ Release builds must not contain test API keys, debug provider defaults, or priva
 - Custom providers may lack Claude-compatible thinking, tool use, token counting, or streaming behavior
 - Large builds can be slow and memory-intensive under PRoot
 - Runtime installation requires a substantial download and free storage
+- Project-specific Android libraries may still be downloaded by Gradle when they are not already in the bundled Maven cache
 
 ## Distribution and Google Play
 
-Mobile Harness is currently intended for signed direct APK distribution and private testing.
+Mobile Harness is currently intended for signed direct APK distribution and private testing. Its Android-project workflow requests permission to submit user-built APKs to Android's package installer, which requires a dedicated Google Play policy declaration and approval if distributed through Play.
 
 The Play-oriented build now targets API 36, emits ARM64-only native code, supports 16 KB page alignment, uses upload-key signing, and includes the required store metadata and declaration worksheets. Submission still requires Play Console enrollment, listing declarations, reviewer access, pre-launch testing, and approval of the downloadable local-runtime architecture. A future Play edition may need to package approved runtime assets differently or move execution to a remote service.
 

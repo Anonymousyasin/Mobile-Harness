@@ -38,6 +38,7 @@ import com.jarves.mh.runtime.RuntimeSetupController
 import com.jarves.mh.runtime.RuntimeSetupService
 import com.jarves.mh.runtime.RuntimeSetupSnapshot
 import com.jarves.mh.runtime.RuntimeSetupStatus
+import com.jarves.mh.runtime.AndroidAppInstaller
 import java.io.File
 import java.io.RandomAccessFile
 import java.net.UnknownHostException
@@ -103,6 +104,7 @@ data class AppUiState(
     val projectChats: List<ProjectChat> = emptyList(),
     val activeChatId: String? = null,
     val workspaceFiles: List<WorkspaceEntry> = emptyList(),
+    val androidProjectDetected: Boolean = false,
     val filesLoading: Boolean = false,
     val openedFilePath: String? = null,
     val openedFileContent: String? = null,
@@ -140,6 +142,8 @@ data class AppUiState(
     val devStackMessage: String? = null,
     val devStackProgress: Float = 0f,
     val devStackBytes: Pair<Long, Long>? = null,
+    val androidBuildRunning: Boolean = false,
+    val androidBuildMessage: String? = null,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -163,7 +167,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             projects = preferences.loadProjects(),
             selectedDevStacks = preferences.selectedDevStacks.mapNotNull { name ->
                 runCatching { DevStack.valueOf(name) }.getOrNull()
-            }.toSet(),
+            }.toSet() + DevStack.WEB,
         ),
     )
 
@@ -654,6 +658,75 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return selected.apply { mkdirs() }
     }
 
+    fun buildAndRunAndroidApp() {
+        val project = _state.value.activeProject ?: return
+        if (_state.value.androidBuildRunning) return
+        if (_state.value.isRunning) {
+            _state.update { it.copy(toastMessage = "Wait for Claude to finish creating the project before building.") }
+            return
+        }
+        if (_state.value.projectTerminalRunning) {
+            _state.update { it.copy(toastMessage = "Wait for the project terminal command to finish before building.") }
+            return
+        }
+        _state.update { it.copy(androidBuildRunning = true, androidBuildMessage = "Building debug APK…", toastMessage = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val installed = installer.installedRuntime()
+                val workspace = findAndroidGradleProjectRoot(projectWorkspaceRoot(project))
+                    ?: error("No Android Gradle project found yet. Ask Claude to create it, then wait for the task to finish.")
+                val process = installer.process(
+                    installed.proot, installed.rootfs, workspace, emptyMap(),
+                    listOf(
+                        "/usr/bin/bash", "-lc",
+                        "gradle --init-script /root/.gradle/init.d/pocketdev-android.gradle " +
+                            "-Pandroid.aapt2FromMavenOverride=/root/android-sdk/build-tools/35.0.0/aapt2 " +
+                            "--no-daemon assembleDebug --console=plain",
+                    ),
+                    projectGuestRoot(project),
+                )
+                val exitCode = process.waitFor()
+                val buildOutput = (process as? NativeSpawnProcess)?.outputFile?.readText().orEmpty()
+                check(exitCode == 0) {
+                    buildOutput.trim().takeLast(2_000).ifBlank { "Gradle build failed (exit code $exitCode)" }
+                }
+                val apk = workspace.walkTopDown()
+                    .filter { it.isFile && it.extension.equals("apk", ignoreCase = true) && it.path.contains("/outputs/apk/debug/") }
+                    .maxByOrNull(File::lastModified)
+                    ?: error("Gradle finished but no debug APK was found")
+                AndroidAppInstaller.install(getApplication(), apk)
+            }.onSuccess {
+                withContext(Dispatchers.Main) {
+                    _state.update {
+                        it.copy(
+                            androidBuildRunning = false,
+                            androidBuildMessage = "APK sent to Android installer",
+                            toastMessage = "APK built. Complete Android's install prompt.",
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) {
+                    _state.update { it.copy(androidBuildRunning = false, androidBuildMessage = null, toastMessage = error.message ?: "Could not build APK") }
+                }
+            }
+        }
+    }
+
+    private fun findAndroidGradleProjectRoot(workspace: File): File? {
+        val settingsNames = setOf("settings.gradle", "settings.gradle.kts", "settings.gradle.dcl")
+        return workspace.walkTopDown()
+            .maxDepth(4)
+            .filter { it.isFile && it.name in settingsNames }
+            .map(File::getParentFile)
+            .sortedBy { it.absolutePath.length }
+            .firstOrNull { root ->
+                root.walkTopDown()
+                    .maxDepth(4)
+                    .any { it.isFile && it.invariantSeparatorsPath.endsWith("src/main/AndroidManifest.xml") }
+            }
+    }
+
 
     fun toggleTheme() {
         val next = if (_state.value.themeMode == com.jarves.mh.ui.theme.AppThemeMode.DARK) {
@@ -894,6 +967,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Called from the first-launch tool picker; persists the choice for setup and Settings. */
     fun toggleDevStack(stack: DevStack) {
+        if (stack == DevStack.WEB) return
         val updated = _state.value.selectedDevStacks.toMutableSet().apply {
             if (!add(stack)) remove(stack)
         }
@@ -1001,6 +1075,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 taskFinishedAtMillis = null,
                 changes = emptyList(),
                 workspaceFiles = emptyList(),
+                androidProjectDetected = false,
                 filesLoading = true,
                 projectTerminalLines = terminal.lines,
                 projectTerminalLiveOutput = "",
@@ -1059,6 +1134,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 activeChatId = null,
                 changes = emptyList(),
                 workspaceFiles = emptyList(),
+                androidProjectDetected = false,
                 filesLoading = false,
                 isRunning = false,
                 activeSessionId = null,
@@ -1106,6 +1182,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 taskFinishedAtMillis = null,
                 changes = emptyList(),
                 workspaceFiles = emptyList(),
+                androidProjectDetected = false,
                 filesLoading = true,
                 projectTerminalLines = emptyList(),
                 projectTerminalLiveOutput = "",
@@ -1313,8 +1390,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = _state.value.activeProject ?: return
         _state.update { it.copy(filesLoading = true) }
         viewModelScope.launch {
-            val (entries, suggestedRoot) = withContext(Dispatchers.IO) {
-                readWorkspace(project) to if (project.rootPath.isBlank()) detectNestedProjectRoot(project) else null
+            val (entries, suggestedRoot, androidProjectDetected) = withContext(Dispatchers.IO) {
+                Triple(
+                    readWorkspace(project),
+                    if (project.rootPath.isBlank()) detectNestedProjectRoot(project) else null,
+                    findAndroidGradleProjectRoot(projectWorkspaceRoot(project)) != null,
+                )
             }
             if (_state.value.activeProject?.id == project.id) {
                 _state.update {
@@ -1322,6 +1403,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         workspaceFiles = entries,
                         filesLoading = false,
                         suggestedProjectRoot = suggestedRoot,
+                        androidProjectDetected = androidProjectDetected,
                     )
                 }
             }

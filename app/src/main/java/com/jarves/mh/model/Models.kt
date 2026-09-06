@@ -126,8 +126,8 @@ enum class DevStack(
     ),
     ANDROID(
         "Android (Java / Kotlin)",
-        "Build Android app projects. Running them on your phone arrives in a later update.",
-        "OpenJDK build tools inside Ubuntu",
+        "Build Android app projects and install them directly on this phone.",
+        "JDK 17, ARM64 Android SDK 36, Build Tools 35, Gradle 8.14.3, and an offline Maven cache",
     ),
     CPP(
         "C / C++",

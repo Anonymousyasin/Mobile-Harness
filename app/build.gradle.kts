@@ -1,4 +1,5 @@
 import java.util.Properties
+import org.gradle.api.tasks.Sync
 
 plugins {
     id("com.android.application")
@@ -24,6 +25,19 @@ val hasUploadSigning = listOf(
     uploadKeyAlias,
     uploadKeyPassword,
 ).all { !it.isNullOrBlank() }
+val runtimeReleaseBaseUrl =
+    "https://github.com/techjarves/Mobile-Harness/releases/download/runtime-2026.09.4"
+val runtimeBundleDir = rootProject.layout.projectDirectory.dir("dist/runtime-bundles")
+val generatedRuntimeAssets = layout.buildDirectory.dir("generated/runtime-assets")
+
+val prepareOfflineRuntimeAssets = tasks.register<Sync>("prepareOfflineRuntimeAssets") {
+    from(
+        runtimeBundleDir.file("pocketdev-core-arm64-2026.09.4.tar.zst"),
+        runtimeBundleDir.file("pocketdev-python-arm64-2026.09.2.tar.zst"),
+        runtimeBundleDir.file("pocketdev-android-arm64-2026.09.1.tar.zst"),
+    )
+    into(generatedRuntimeAssets.map { it.dir("offline/runtime") })
+}
 
 fun buildConfigString(value: String): String =
     "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
@@ -74,6 +88,22 @@ android {
         )
     }
 
+    flavorDimensions += "runtimeDelivery"
+    productFlavors {
+        create("online") {
+            dimension = "runtimeDelivery"
+            buildConfigField("boolean", "OFFLINE_RUNTIME_BUNDLES", "false")
+            buildConfigField("String", "RUNTIME_RELEASE_BASE_URL", buildConfigString(runtimeReleaseBaseUrl))
+        }
+        create("offline") {
+            dimension = "runtimeDelivery"
+            buildConfigField("boolean", "OFFLINE_RUNTIME_BUNDLES", "true")
+            buildConfigField("String", "RUNTIME_RELEASE_BASE_URL", buildConfigString(runtimeReleaseBaseUrl))
+        }
+    }
+
+    sourceSets.getByName("offline").assets.srcDir(generatedRuntimeAssets.map { it.dir("offline") })
+
     buildTypes {
         debug {
             buildConfigField(
@@ -111,7 +141,11 @@ android {
     }
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     packaging.jniLibs.useLegacyPackaging = true
+    androidResources.noCompress += "zst"
 }
+
+tasks.matching { it.name.startsWith("mergeOffline") && it.name.endsWith("Assets") }
+    .configureEach { dependsOn(prepareOfflineRuntimeAssets) }
 
 tasks.register("playReadinessCheck") {
     group = "verification"
@@ -141,6 +175,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.apache.commons:commons-compress:1.27.1")
+    implementation("com.github.luben:zstd-jni:1.5.6-9@aar")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250107")

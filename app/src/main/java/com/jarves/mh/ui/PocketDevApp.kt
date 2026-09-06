@@ -15,6 +15,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebChromeClient
 import android.widget.Toast
+import com.jarves.mh.BuildConfig
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -303,6 +304,7 @@ fun PocketDevApp(viewModel: MainViewModel = viewModel()) {
             onAddAttachments = viewModel::addChatAttachments,
             onRemoveAttachment = viewModel::removePendingAttachment,
             onOpenAttachment = viewModel::openChatAttachment,
+            onBuildAndRunAndroid = viewModel::buildAndRunAndroidApp,
         )
         else -> RootScreenHost(state, viewModel, projectsListState)
     }
@@ -765,7 +767,7 @@ private fun RuntimeSetupPromptScreen(
                         SpecRow(
                             icon = Icons.Default.Storage,
                             label = "Download",
-                            value = "~500 MB · Wi-Fi recommended",
+                            value = "149–774 MB · depends on selected tools",
                             statusOk = true,
                         )
                     }
@@ -891,7 +893,12 @@ private fun RuntimeSetupPromptScreen(
                         }
                         Spacer(Modifier.width(11.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("Core tools included", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                            Text(
+                                if (BuildConfig.OFFLINE_RUNTIME_BUNDLES) "Core tools included" else "Core runtime · 149 MB download",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.5.sp,
+                            )
                             Text("Claude Code  ·  Node.js  ·  npm  ·  Git", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                         }
                         Icon(Icons.Default.Check, "Included", tint = PocketGreen, modifier = Modifier.size(20.dp))
@@ -912,7 +919,8 @@ private fun RuntimeSetupPromptScreen(
                         DevStack.entries.forEachIndexed { index, stack ->
                             DevStackChoiceRow(
                                 stack = stack,
-                                selected = stack in selectedStacks,
+                                selected = stack == DevStack.WEB || stack in selectedStacks,
+                                locked = stack == DevStack.WEB,
                                 onClick = { onToggleStack(stack) },
                             )
                             if (index != DevStack.entries.lastIndex) {
@@ -927,8 +935,7 @@ private fun RuntimeSetupPromptScreen(
                     Icon(Icons.Default.Storage, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
                     Spacer(Modifier.width(7.dp))
                     Text(
-                        if (selectedStacks.isEmpty()) "Core runtime only · smallest download"
-                        else "${selectedStacks.size} optional toolchain${if (selectedStacks.size == 1) "" else "s"} selected",
+                        toolchainDownloadSummary(selectedStacks),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                     )
@@ -977,15 +984,43 @@ private fun RuntimeSetupPromptScreen(
     }
 }
 
+private const val CORE_RUNTIME_DOWNLOAD_MB = 149
+private const val PYTHON_RUNTIME_DOWNLOAD_MB = 55
+private const val ANDROID_RUNTIME_DOWNLOAD_MB = 570
+
+private fun stackDownloadLabel(stack: DevStack): String = when {
+    stack == DevStack.WEB -> " · included"
+    BuildConfig.OFFLINE_RUNTIME_BUNDLES && stack in setOf(DevStack.PYTHON, DevStack.ANDROID) -> " · included"
+    !BuildConfig.OFFLINE_RUNTIME_BUNDLES && stack == DevStack.PYTHON -> " · 55 MB"
+    !BuildConfig.OFFLINE_RUNTIME_BUNDLES && stack == DevStack.ANDROID -> " · 570 MB"
+    else -> ""
+}
+
+private fun toolchainDownloadSummary(selected: Set<DevStack>): String {
+    if (BuildConfig.OFFLINE_RUNTIME_BUNDLES) return "All selected bundles are included in this offline app"
+    val total = CORE_RUNTIME_DOWNLOAD_MB +
+        (if (DevStack.PYTHON in selected) PYTHON_RUNTIME_DOWNLOAD_MB else 0) +
+        (if (DevStack.ANDROID in selected) ANDROID_RUNTIME_DOWNLOAD_MB else 0)
+    val laterPackages = selected.intersect(setOf(DevStack.CPP, DevStack.PHP))
+    return buildString {
+        append("Download: ")
+        append(total)
+        append(" MB")
+        if (laterPackages.isNotEmpty()) append(" · C/PHP packages download later")
+        if (total >= 500) append(" · Wi-Fi recommended")
+    }
+}
+
 @Composable
 private fun DevStackChoiceRow(
     stack: DevStack,
     selected: Boolean,
+    locked: Boolean,
     onClick: () -> Unit,
 ) {
     val visuals = getDevStackVisuals(stack)
     val conciseDescription = when (stack) {
-        DevStack.WEB -> "Websites and JavaScript apps"
+        DevStack.WEB -> "Included with the Core runtime"
         DevStack.PYTHON -> "Scripts, automation and backends"
         DevStack.ANDROID -> "Java and Kotlin build tools"
         DevStack.CPP -> "Native apps and command-line tools"
@@ -996,7 +1031,7 @@ private fun DevStackChoiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent)
-            .clickable(onClick = onClick)
+            .clickable(enabled = !locked, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1010,7 +1045,12 @@ private fun DevStackChoiceRow(
         }
         Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) {
-            Text(stack.label, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Text(
+                stack.label + stackDownloadLabel(stack),
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+            )
             Spacer(Modifier.height(1.dp))
             Text(conciseDescription, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -2382,9 +2422,11 @@ private fun WorkspaceScreen(
     onAddAttachments: (List<Uri>) -> Unit,
     onRemoveAttachment: (String) -> Unit,
     onOpenAttachment: (ChatAttachment) -> Unit,
+    onBuildAndRunAndroid: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
+    val isAndroidProject = state.androidProjectDetected
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val exportProjectLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip"),
@@ -2393,6 +2435,16 @@ private fun WorkspaceScreen(
     val attachmentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
         onResult = onAddAttachments,
+    )
+    val unknownAppsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()) {
+                onBuildAndRunAndroid()
+            } else {
+                Toast.makeText(context, "Allow app installs to run Android projects", Toast.LENGTH_LONG).show()
+            }
+        },
     )
     val chatListState = rememberLazyListState()
     var userScrolledUp by rememberSaveable { mutableStateOf(false) }
@@ -2523,6 +2575,27 @@ private fun WorkspaceScreen(
                 },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Projects") } },
                 actions = {
+                    if (isAndroidProject) {
+                        IconButton(
+                            onClick = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                                    !context.packageManager.canRequestPackageInstalls()) {
+                                    unknownAppsLauncher.launch(
+                                        Intent(
+                                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                            Uri.parse("package:${context.packageName}"),
+                                        ),
+                                    )
+                                } else {
+                                    onBuildAndRunAndroid()
+                                }
+                            },
+                            enabled = !state.androidBuildRunning && !state.isRunning && !state.projectTerminalRunning,
+                        ) {
+                            if (state.androidBuildRunning) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Default.PlayArrow, "Build and run Android app")
+                        }
+                    }
                     IconButton(onClick = { showChats = true }) { Icon(Icons.Default.History, "Project chats") }
                     if (state.isRunning) CircularProgressIndicator(Modifier.padding(12.dp).size(20.dp), strokeWidth = 2.dp)
                 },
@@ -3362,7 +3435,7 @@ private fun ActivitySummaryRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            if (item?.isCommand == true) Icons.Default.Terminal else Icons.Default.AutoAwesome,
+            activityIcon(item),
             null,
             Modifier.size(16.dp),
             tint = muted,
@@ -3380,6 +3453,18 @@ private fun ActivitySummaryRow(
             tint = muted,
         )
     }
+}
+
+private fun activityIcon(item: ActivityItem?): ImageVector = when {
+    item == null -> Icons.Default.AutoAwesome
+    item.isCommand || item.title.equals("Bash", ignoreCase = true) -> Icons.Default.Terminal
+    item.title.equals("Write", ignoreCase = true) ||
+        item.title.equals("Edit", ignoreCase = true) ||
+        item.title.equals("NotebookEdit", ignoreCase = true) -> Icons.Default.Edit
+    item.title.equals("Read", ignoreCase = true) -> Icons.Default.Description
+    item.title.equals("Glob", ignoreCase = true) ||
+        item.title.equals("Grep", ignoreCase = true) -> Icons.Default.Search
+    else -> Icons.Default.AutoAwesome
 }
 
 @Composable
