@@ -61,6 +61,8 @@ class RuntimeInstaller(private val context: Context) {
     private val coreToolsMarker = File(rootfs, ".pocket-core-tools-version")
     private val systemUpgradeMarker = File(rootfs, ".pocket-system-upgrade-version")
     private val devStacksFile = File(rootfs, ".pocket-dev-stacks.json")
+    private val dshMarker = File(rootfs, ".pocket-dsh-version")
+    private val dshAndroidCompatibilityMarker = File(rootfs, ".pocket-dsh-android-compat-version")
     private val macosMetadataRepairMarker = File(rootfs, ".pocket-macos-metadata-repair")
 
     fun isInstalled(): Boolean {
@@ -132,6 +134,7 @@ class RuntimeInstaller(private val context: Context) {
 
     suspend fun ensureInstalled(
         selectedStacks: Set<DevStack> = emptySet(),
+        agent: com.jarves.mh.model.AgentKind = com.jarves.mh.model.AgentKind.CLAUDE_CODE,
         onProgress: suspend (RuntimeInstallProgress) -> Unit,
     ): InstalledRuntime {
         require(android.os.Build.SUPPORTED_ABIS.contains("arm64-v8a")) { "Pocket runtime requires an ARM64 device" }
@@ -172,7 +175,10 @@ class RuntimeInstaller(private val context: Context) {
         }
         ensureSettingsAndHooks()
 
-        if (hasInternetConnection()) {
+        // DeepSeek Harness users never launch Claude Code: the binary baked into the
+        // Core bundle stays as a standby copy and no update is downloaded for it.
+        val wantsClaudeUpdate = agent != com.jarves.mh.model.AgentKind.DEEPSEEK_HARNESS
+        if (wantsClaudeUpdate && hasInternetConnection()) {
             onProgress(RuntimeInstallProgress("Checking the latest Claude Code release", 0.32f))
             runCatching {
                 val latestVersion = fetchText("https://registry.npmjs.org/@anthropic-ai/claude-code/latest")
@@ -200,8 +206,10 @@ class RuntimeInstaller(private val context: Context) {
             }.onFailure {
                 onProgress(RuntimeInstallProgress("Using bundled Claude Code ${marker.readText().trim()}", 0.56f))
             }
-        } else {
+        } else if (wantsClaudeUpdate) {
             onProgress(RuntimeInstallProgress("Offline — using bundled Claude Code ${marker.readText().trim()}", 0.56f))
+        } else {
+            onProgress(RuntimeInstallProgress("Bundled Claude Code kept as standby", 0.56f))
         }
 
         val version = marker.readText().trim()
@@ -240,8 +248,113 @@ class RuntimeInstaller(private val context: Context) {
         // The binary and version manifest were already checksum-verified above. Running a
         // separate `claude --version` probe under PRoot can leave inherited output pipes
         // open on some Android kernels, so the real user session is the launch check.
+        if (agent == com.jarves.mh.model.AgentKind.DEEPSEEK_HARNESS) {
+            ensureDshInstalled(proot, 0.985f, onProgress)
+        }
         onProgress(RuntimeInstallProgress("Setup complete", 1f))
         return InstalledRuntime(proot, rootfs, claude, version)
+    }
+
+    /**
+     * Installs one coding agent on demand. Safe to call again: an already-installed
+     * agent returns immediately without network access. Claude Code always ships
+     * inside the Core bundle, so this only ever fetches DeepSeek Harness.
+     */
+    suspend fun ensureAgentInstalled(
+        agent: com.jarves.mh.model.AgentKind,
+        onProgress: suspend (RuntimeInstallProgress) -> Unit,
+    ) {
+        if (agent != com.jarves.mh.model.AgentKind.DEEPSEEK_HARNESS) return
+        val runtime = installedRuntime()
+        ensureDshInstalled(runtime.proot, 0.05f, onProgress)
+        onProgress(RuntimeInstallProgress("DeepSeek Harness is ready", 1f))
+    }
+
+    fun isAgentInstalled(agent: com.jarves.mh.model.AgentKind): Boolean {
+        if (agent != com.jarves.mh.model.AgentKind.DEEPSEEK_HARNESS) return isInstalled()
+        return isInstalled() &&
+            // /usr/local/bin/dsh is an absolute guest symlink. File.exists() follows it
+            // against Android's host root and therefore reports false outside PRoot.
+            File(rootfs, "usr/local/lib/dsh/node_modules/.bin/dsh").isFile &&
+            dshMarker.readTextOrNull() == DSH_VERSION
+    }
+
+    val dshVersion: String get() = dshMarker.readTextOrNull().orEmpty()
+
+    private suspend fun ensureDshInstalled(
+        proot: File,
+        fraction: Float,
+        onProgress: suspend (RuntimeInstallProgress) -> Unit,
+    ) {
+        if (isAgentInstalled(com.jarves.mh.model.AgentKind.DEEPSEEK_HARNESS)) {
+            ensureDshAndroidCompatibility()
+            return
+        }
+        installRuntimeOverlay(
+            bundle = DSH_BUNDLE,
+            message = "Installing DeepSeek Harness $DSH_VERSION",
+            from = fraction,
+            to = 0.995f,
+            onProgress = onProgress,
+        )
+        ensureDshAndroidCompatibility()
+        verifyGuest(proot, "/usr/local/bin/dsh --profile headless --help", "DeepSeek Harness verification failed")
+        require(isAgentInstalled(com.jarves.mh.model.AgentKind.DEEPSEEK_HARNESS)) {
+            "The DeepSeek Harness runtime bundle is incomplete"
+        }
+    }
+
+    /**
+     * DSH uses POSIX hard links for no-clobber publication of new session and
+     * workspace files. Android blocks that syscall inside PRoot. PRoot's
+     * `--link2symlink` workaround is unsuitable here because DSH immediately
+     * deletes its staging file, leaving the published symlink dangling.
+     *
+     * The bundled, pinned DSH build can use COPYFILE_EXCL for the same
+     * no-clobber guarantee. Existing-file edits continue to use atomic rename.
+     */
+    fun ensureDshAndroidCompatibility() {
+        if (!isAgentInstalled(com.jarves.mh.model.AgentKind.DEEPSEEK_HARNESS)) return
+        val persistence = File(
+            rootfs,
+            "usr/local/lib/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
+        )
+        val localFs = File(
+            rootfs,
+            "usr/local/lib/dsh/node_modules/@deepseek-ai/dsh-fs-local/lib/index.js",
+        )
+        patchDshHardLinkPublication(
+            file = persistence,
+            importBefore = "import { link, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, truncate } from \"node:fs/promises\";",
+            importAfter = "import { copyFile, link, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, truncate } from \"node:fs/promises\";",
+            callBefore = "await link(tmp, finalPath);",
+            callAfter = "await copyFile(tmp, finalPath, 1);",
+        )
+        patchDshHardLinkPublication(
+            file = localFs,
+            importBefore = "import { chmod, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat } from \"node:fs/promises\";",
+            importAfter = "import { chmod, copyFile, link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat } from \"node:fs/promises\";",
+            callBefore = "await linkFile(tempPath, absolutePath);",
+            callAfter = "await copyFile(tempPath, absolutePath, 1);",
+        )
+        dshAndroidCompatibilityMarker.writeText(DSH_ANDROID_COMPATIBILITY_VERSION)
+    }
+
+    private fun patchDshHardLinkPublication(
+        file: File,
+        importBefore: String,
+        importAfter: String,
+        callBefore: String,
+        callAfter: String,
+    ) {
+        check(file.isFile) { "DeepSeek Harness compatibility file is missing: ${file.name}" }
+        var source = file.readText()
+        if (callAfter in source && importAfter in source) return
+        check(callBefore in source && importBefore in source) {
+            "DeepSeek Harness $DSH_VERSION is not compatible with this PocketDev build"
+        }
+        source = source.replace(importBefore, importAfter).replace(callBefore, callAfter)
+        file.writeText(source)
     }
 
     /**
@@ -908,6 +1021,7 @@ class RuntimeInstaller(private val context: Context) {
         environment: Map<String, String>,
         guestCommand: List<String>,
         guestWorkspacePath: String = "/workspace",
+        emulateHardLinks: Boolean = true,
     ): Process {
         require(
             guestWorkspacePath == "/workspace" ||
@@ -922,7 +1036,7 @@ class RuntimeInstaller(private val context: Context) {
         val bridge = File(context.filesDir, "runtime-bridge").apply { mkdirs() }
         val args = buildList {
             add(proot.absolutePath)
-            add("--link2symlink")
+            if (emulateHardLinks) add("--link2symlink")
             add("-0")
             add("-r")
             add(rootfs.absolutePath)
@@ -1302,6 +1416,9 @@ printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decis
         private const val ANDROID_AAPT2_GUEST_PATH = "/root/android-sdk/build-tools/35.0.0/aapt2"
         private const val ANDROID_AAPT2_HOST_PATH = "root/android-sdk/build-tools/35.0.0/aapt2"
         private val CLAUDE_VERSION_PATTERN = Regex("[0-9]+\\.[0-9]+\\.[0-9]+")
+        /** Pinned DeepSeek Harness release installed via npm inside the guest (verified 2026-09-06). */
+        const val DSH_VERSION = "0.1.2-rc.1"
+        private const val DSH_ANDROID_COMPATIBILITY_VERSION = "copyfile-excl-v1"
         private val CORE_BUNDLE = RuntimeBundle(
             label = "Core",
             fileName = "pocketdev-core-arm64-2026.09.4.tar.zst",
@@ -1319,6 +1436,12 @@ printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decis
             fileName = "pocketdev-android-arm64-2026.09.1.tar.zst",
             sha256 = "01bea058ebcb17416d1eb08c0211b3782da3228eb3c8348eb3719f2d61dd3ec6",
             compressedBytes = 569_652_007L,
+        )
+        private val DSH_BUNDLE = RuntimeBundle(
+            label = "DeepSeek Harness",
+            fileName = "pocketdev-dsh-arm64-2026.09.1.tar.zst",
+            sha256 = "88e6a23ba74e1cd74a2c923b7e0d6bd78ba4b7e5f8a9b649f12bf4ffe158cce5",
+            compressedBytes = 27_752_194L,
         )
         private const val MAX_TERMINAL_LINE = 500
         private const val MAX_COLLECTED_OUTPUT = 24_000

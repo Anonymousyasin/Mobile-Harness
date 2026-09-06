@@ -19,6 +19,12 @@ partitions, Magisk files, device identifiers, or user data are included.
 - `php`: PHP CLI, common extensions, and Composer.
 - Claude Code remains separate so PocketDev can install or update Anthropic's
   signed ARM64 binary independently of the larger runtime bundles.
+- `dsh`: the pinned official DeepSeek Harness npm payload and launcher. Build it
+  from a verified PocketDev installation with
+  `scripts/runtime-bundles/build-dsh-from-installed-android.sh`; the export
+  intentionally excludes provider settings, credentials, sessions, and projects.
+  Online builds download this artifact from the runtime GitHub release; offline
+  builds embed the identical checksum-verified artifact in the APK.
 
 The current artifact metadata and SHA-256 checksums live in
 `dist/runtime-bundles/manifest.json`. Large `.tar.zst` files and downloaded

@@ -166,10 +166,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jarves.mh.model.ActivityItem
+import com.jarves.mh.model.AgentKind
 import com.jarves.mh.model.ChangeItem
 import com.jarves.mh.model.ChatMessage
 import com.jarves.mh.model.ChatAttachment
 import com.jarves.mh.model.DevStack
+import com.jarves.mh.model.DEEPSEEK_HARNESS_PROVIDERS
 import com.jarves.mh.model.DiffLine
 import com.jarves.mh.model.DiffLineType
 import com.jarves.mh.model.Project
@@ -177,6 +179,7 @@ import com.jarves.mh.model.ProjectKind
 import com.jarves.mh.model.ProjectChat
 import com.jarves.mh.model.ProviderKind
 import com.jarves.mh.model.ProviderProfile
+import com.jarves.mh.model.providersForAgent
 import com.jarves.mh.model.ToolRequest
 import com.jarves.mh.model.WorkspaceEntry
 import com.jarves.mh.model.projectSlug
@@ -241,9 +244,11 @@ fun PocketDevApp(viewModel: MainViewModel = viewModel()) {
             )
         state.startupStage == StartupStage.SETUP_REQUIRED -> RuntimeSetupPromptScreen(
             selectedStacks = state.selectedDevStacks,
+            selectedAgent = state.agentKind,
             themeMode = state.themeMode,
             onToggleTheme = viewModel::toggleTheme,
             onToggleStack = viewModel::toggleDevStack,
+            onSelectAgent = viewModel::selectAgent,
             onDownload = viewModel::startRuntimeSetup,
         )
         state.startupStage == StartupStage.INSTALLING ||
@@ -263,6 +268,7 @@ fun PocketDevApp(viewModel: MainViewModel = viewModel()) {
         state.startupStage == StartupStage.MODEL_SETUP -> ProviderSetupScreen(
             initial = state.provider,
             onboarding = true,
+            agentKind = state.agentKind,
             initialStep = 1,
             onSave = viewModel::finishOnboarding,
             onDiscover = viewModel::discoverModels,
@@ -627,9 +633,11 @@ private fun getDevStackVisuals(stack: DevStack): DevStackVisuals = when (stack) 
 @Composable
 private fun RuntimeSetupPromptScreen(
     selectedStacks: Set<DevStack>,
+    selectedAgent: AgentKind = AgentKind.CLAUDE_CODE,
     themeMode: AppThemeMode = AppThemeMode.DARK,
     onToggleTheme: () -> Unit = {},
     onToggleStack: (DevStack) -> Unit,
+    onSelectAgent: (AgentKind) -> Unit = {},
     onDownload: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -699,7 +707,7 @@ private fun RuntimeSetupPromptScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "Mobile Harness checks compatibility before downloading the private Linux runtime with real Claude Code, Node.js, and Git.",
+                    text = "Mobile Harness checks compatibility before downloading the private Linux runtime with your coding agent, Node.js, and Git.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.5.sp,
                     lineHeight = 19.sp,
@@ -908,6 +916,39 @@ private fun RuntimeSetupPromptScreen(
                 }
 
                 Spacer(Modifier.height(18.dp))
+                Text("CODING AGENT", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.9.sp)
+                Spacer(Modifier.height(8.dp))
+
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column {
+                        AgentKind.entries.forEachIndexed { index, agent ->
+                            AgentChoiceRow(
+                                agent = agent,
+                                selected = selectedAgent == agent,
+                                onClick = { onSelectAgent(agent) },
+                            )
+                            if (index != AgentKind.entries.lastIndex) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(start = 62.dp),
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                )
+                            }
+                        }
+                    }
+                }
+                Text(
+                    "Only the selected agent is downloaded. You can install the other one later from Settings.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 8.dp, start = 2.dp, end = 2.dp),
+                )
+
+                Spacer(Modifier.height(18.dp))
                 Text("OPTIONAL TOOLCHAINS", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.9.sp)
                 Spacer(Modifier.height(8.dp))
 
@@ -1093,6 +1134,77 @@ private fun DevStackChoiceRow(
             if (selected) {
                 Icon(Icons.Default.Check, "Selected", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(14.dp))
             }
+        }
+    }
+}
+
+@Composable
+private fun AgentChoiceRow(
+    agent: AgentKind,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val accent = if (agent == AgentKind.DEEPSEEK_HARNESS) Color(0xFF4D6BFE) else Color(0xFFD97757)
+    val mark = if (agent == AgentKind.DEEPSEEK_HARNESS) "DS" else "CC"
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(accent.copy(alpha = 0.15f), RoundedCornerShape(10.dp))
+                .border(1.dp, accent.copy(alpha = 0.28f), RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(mark, color = accent, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    agent.title,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                )
+                if (agent == AgentKind.DEEPSEEK_HARNESS) {
+                    Spacer(Modifier.width(7.dp))
+                    Surface(
+                        color = PocketOrange.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(50),
+                    ) {
+                        Text(
+                            "Recommended",
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                            color = PocketOrange,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(1.dp))
+            Text(agent.subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(1.dp))
+            Text(agent.downloadNote, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .size(21.dp)
+                .border(
+                    width = if (selected) 2.dp else 1.dp,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                    shape = CircleShape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) Box(Modifier.size(9.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
         }
     }
 }
@@ -1535,6 +1647,7 @@ private fun RootScreenHost(
                     onClearTerminal = viewModel::clearTerminal,
                     getSavedApiKey = viewModel::getSavedApiKey,
                     onInstallDevStack = viewModel::installDevStack,
+                    onInstallAgent = viewModel::installAgent,
                     initialDebugUpdateManifestUrl = viewModel.debugUpdateManifestUrl(),
                     onSetDebugUpdateManifestUrl = viewModel::setDebugUpdateManifestUrl,
                     onClearDebugUpdateManifestUrl = viewModel::clearDebugUpdateManifestUrl,
@@ -1549,6 +1662,7 @@ private fun RootScreenHost(
 private fun ProviderSetupScreen(
     initial: ProviderProfile,
     onboarding: Boolean,
+    agentKind: AgentKind = AgentKind.CLAUDE_CODE,
     initialStep: Int = if (onboarding) 0 else 1,
     onBack: (() -> Unit)? = null,
     onSave: (ProviderProfile, String) -> Unit,
@@ -1562,6 +1676,7 @@ private fun ProviderSetupScreen(
     var selected by rememberSaveable { mutableStateOf(initial.kind) }
     var baseUrl by rememberSaveable { mutableStateOf(initial.baseUrl.ifBlank { "https://api.deepseek.com/anthropic" }) }
     var model by rememberSaveable { mutableStateOf(initial.model.ifBlank { "deepseek-chat" }) }
+    var dshApi by rememberSaveable { mutableStateOf(initial.dshApi.ifBlank { "anthropic-messages" }) }
     var apiKey by rememberSaveable { mutableStateOf("") }
 
     val handleBack: (() -> Unit)? = when {
@@ -1608,6 +1723,7 @@ private fun ProviderSetupScreen(
                 0 -> DeviceCheckStep(context, onContinue = { step = 1 })
                 1 -> ProviderChoiceStep(
                     selected = selected,
+                    agentKind = agentKind,
                     onSelected = {
                         if (selected != it) {
                             selected = it
@@ -1624,19 +1740,69 @@ private fun ProviderSetupScreen(
                 )
                 else -> ProviderCredentialsStep(
                     provider = selected,
+                    agentKind = agentKind,
                     baseUrl = baseUrl,
                     model = model,
+                    dshApi = dshApi,
                     apiKey = apiKey,
                     onBaseUrl = { baseUrl = it },
                     onModel = { model = it },
+                    onDshApi = { dshApi = it },
                     onApiKey = { apiKey = it },
                     hasStoredSecret = initial.kind == selected && initial.hasSecret,
-                    onDiscover = { onDiscover(ProviderProfile(selected, baseUrl.trim(), model.trim()), apiKey) },
-                    onValidate = { models -> onValidate(ProviderProfile(selected, baseUrl.trim(), model.trim()), apiKey, models) },
-                    onSave = { onSave(ProviderProfile(selected, baseUrl.trim(), model.trim()), apiKey) },
+                    onDiscover = {
+                        val url = if (selected.fixedBaseUrl) selected.defaultBaseUrl else baseUrl.trim()
+                        onDiscover(ProviderProfile(selected, url, model.trim(), dshApi = dshApi), apiKey)
+                    },
+                    onValidate = { models ->
+                        val url = if (selected.fixedBaseUrl) selected.defaultBaseUrl else baseUrl.trim()
+                        onValidate(ProviderProfile(selected, url, model.trim(), dshApi = dshApi), apiKey, models)
+                    },
+                    onSave = {
+                        val url = if (selected.fixedBaseUrl) selected.defaultBaseUrl else baseUrl.trim()
+                        onSave(ProviderProfile(selected, url, model.trim(), dshApi = dshApi), apiKey)
+                    },
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun DshApiProtocolPicker(selected: String, onSelected: (String) -> Unit) {
+    val options = listOf("anthropic-messages", "openai-completions", "openai-responses")
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "Gateway protocol",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+        )
+        options.forEach { option ->
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { onSelected(option) }.padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(19.dp)
+                        .border(
+                            width = if (selected == option) 2.dp else 1.dp,
+                            color = if (selected == option) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                            shape = CircleShape,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (selected == option) Box(Modifier.size(8.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(option, fontSize = 13.sp)
+            }
+        }
+        Text(
+            "Pick the protocol your gateway speaks; DeepSeek Harness routes it directly.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 11.sp,
+        )
     }
 }
 
@@ -1695,7 +1861,13 @@ private fun CheckRow(icon: ImageVector, title: String, value: String, passed: Bo
 }
 
 @Composable
-private fun ProviderChoiceStep(selected: ProviderKind, onSelected: (ProviderKind) -> Unit, onContinue: () -> Unit) {
+private fun ProviderChoiceStep(
+    selected: ProviderKind,
+    agentKind: AgentKind,
+    onSelected: (ProviderKind) -> Unit,
+    onContinue: () -> Unit,
+) {
+    val visibleProviders = remember(agentKind) { providersForAgent(agentKind) }
     Column(Modifier.fillMaxHeight()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -1737,13 +1909,13 @@ private fun ProviderChoiceStep(selected: ProviderKind, onSelected: (ProviderKind
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                itemsIndexed(ProviderKind.entries) { index, provider ->
+                itemsIndexed(visibleProviders) { index, provider ->
                     ProviderChoiceRow(
                         provider = provider,
                         selected = selected == provider,
                         onClick = { onSelected(provider) },
                     )
-                    if (index != ProviderKind.entries.lastIndex) {
+                    if (index != visibleProviders.lastIndex) {
                         HorizontalDivider(
                             modifier = Modifier.padding(start = 68.dp),
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
@@ -1793,6 +1965,7 @@ private fun ProviderChoiceRow(
         ProviderKind.LLM_ROUTER -> Color(0xFF5B8DEF)
         ProviderKind.DEEPSEEK -> Color(0xFF4D6BFE)
         ProviderKind.KIMI -> Color(0xFF8B7CF6)
+        ProviderKind.OPENCODE_ZEN -> Color(0xFF22C55E)
         ProviderKind.CUSTOM -> PocketOrange
     }
     val mark = when (provider) {
@@ -1801,6 +1974,7 @@ private fun ProviderChoiceRow(
         ProviderKind.LLM_ROUTER -> "OR"
         ProviderKind.DEEPSEEK -> "DS"
         ProviderKind.KIMI -> "K"
+        ProviderKind.OPENCODE_ZEN -> "Z"
         ProviderKind.CUSTOM -> "<>"
     }
 
@@ -1875,11 +2049,14 @@ private fun ProviderChoiceRow(
 @Composable
 private fun ProviderCredentialsStep(
     provider: ProviderKind,
+    agentKind: AgentKind = AgentKind.CLAUDE_CODE,
     baseUrl: String,
     model: String,
+    dshApi: String = "anthropic-messages",
     apiKey: String,
     onBaseUrl: (String) -> Unit,
     onModel: (String) -> Unit,
+    onDshApi: (String) -> Unit = {},
     onApiKey: (String) -> Unit,
     hasStoredSecret: Boolean,
     onDiscover: suspend () -> ModelDiscoveryResult,
@@ -2031,8 +2208,11 @@ private fun ProviderCredentialsStep(
             Text(provider.title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(5.dp))
             Text(
-                if (provider.protocol.name.startsWith("OPENAI")) "Mobile Harness will translate Claude Code requests for this provider."
-                else "Claude Code will connect through this API endpoint.",
+                when {
+                    agentKind == AgentKind.DEEPSEEK_HARNESS -> "DeepSeek Harness will connect through this API endpoint."
+                    provider.protocol.name.startsWith("OPENAI") -> "Mobile Harness will translate Claude Code requests for this provider."
+                    else -> "Claude Code will connect through this API endpoint."
+                },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -2047,9 +2227,17 @@ private fun ProviderCredentialsStep(
                         baseUrl,
                         { onBaseUrl(it); status = null; models = emptyList() },
                         label = { Text("Base URL") },
+                        supportingText = {
+                            if (provider.fixedBaseUrl) Text("Fixed by ${provider.title}")
+                        },
+                        readOnly = provider.fixedBaseUrl,
+                        enabled = !provider.fixedBaseUrl,
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    if (agentKind == AgentKind.DEEPSEEK_HARNESS && provider == ProviderKind.CUSTOM) {
+                        DshApiProtocolPicker(selected = dshApi, onSelected = { onDshApi(it); status = null })
+                    }
                     OutlinedTextField(
                         apiKey,
                         { onApiKey(it); status = null },
@@ -2760,6 +2948,7 @@ private fun WorkspaceScreen(
                     taskStartedAtMillis = state.workSegmentStartedAtMillis ?: state.taskStartedAtMillis,
                     taskFinishedAtMillis = state.taskFinishedAtMillis,
                     thinkingActive = state.liveThinking,
+                    agentKind = state.agentKind,
                     pendingAttachments = state.pendingAttachments,
                     onAttach = {
                         attachmentLauncher.launch(arrayOf("image/*", "text/*", "application/json", "application/xml"))
@@ -3061,7 +3250,7 @@ private fun FilesTab(
             }
         }
         if (!loading && files.isEmpty()) {
-            item { EmptyState(Icons.Default.Folder, "No files yet", "Ask Claude Code to create something in this project.") }
+            item { EmptyState(Icons.Default.Folder, "No files yet", "Ask your coding agent to create something in this project.") }
         }
         items(visibleFiles, key = { it.path }) { entry ->
             Row(
@@ -3134,6 +3323,7 @@ private fun ChatTab(
     taskStartedAtMillis: Long?,
     taskFinishedAtMillis: Long?,
     thinkingActive: Boolean,
+    agentKind: AgentKind,
     pendingAttachments: List<ChatAttachment>,
     onAttach: () -> Unit,
     onRemoveAttachment: (String) -> Unit,
@@ -3141,7 +3331,7 @@ private fun ChatTab(
     onRunInTerminal: (String) -> Unit,
 ) {
     val view = LocalView.current
-    // Keep the screen on while Claude is working in this chat. Released automatically
+    // Keep the screen on while the selected agent is working in this chat. Released automatically
     // when the task finishes or the user leaves the chat tab.
     DisposableEffect(isRunning) {
         view.keepScreenOn = isRunning
@@ -3295,7 +3485,7 @@ private fun ChatTab(
                                 Box(contentAlignment = Alignment.CenterStart) {
                                     if (prompt.isEmpty()) {
                                         Text(
-                                            text = "Message Claude…",
+                                            text = "Message ${agentKind.title}…",
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             fontSize = 15.sp,
                                         )
@@ -3584,16 +3774,23 @@ private fun ActivitySummaryRow(
     }
 }
 
-private fun activityIcon(item: ActivityItem?): ImageVector = when {
-    item == null -> Icons.Default.AutoAwesome
-    item.isCommand || item.title.equals("Bash", ignoreCase = true) -> Icons.Default.Terminal
-    item.title.equals("Write", ignoreCase = true) ||
-        item.title.equals("Edit", ignoreCase = true) ||
-        item.title.equals("NotebookEdit", ignoreCase = true) -> Icons.Default.Edit
-    item.title.equals("Read", ignoreCase = true) -> Icons.Default.Description
-    item.title.equals("Glob", ignoreCase = true) ||
-        item.title.equals("Grep", ignoreCase = true) -> Icons.Default.Search
-    else -> Icons.Default.AutoAwesome
+private fun activityIcon(item: ActivityItem?): ImageVector {
+    if (item == null) return Icons.Default.AutoAwesome
+    val task = item.title
+        .removePrefix("Running ")
+        .removeSuffix(" completed")
+        .trim()
+    return when {
+        item.isCommand || task.equals("Bash", ignoreCase = true) -> Icons.Default.Terminal
+        task.equals("Write", ignoreCase = true) ||
+            task.equals("Edit", ignoreCase = true) ||
+            task.equals("NotebookEdit", ignoreCase = true) -> Icons.Default.Edit
+        task.equals("Read", ignoreCase = true) -> Icons.Default.Description
+        task.equals("Glob", ignoreCase = true) ||
+            task.equals("Grep", ignoreCase = true) -> Icons.Default.Search
+        task.contains("file", ignoreCase = true) -> Icons.Default.Description
+        else -> Icons.Default.AutoAwesome
+    }
 }
 
 @Composable
@@ -3784,7 +3981,7 @@ private fun FilesTab(files: List<WorkspaceEntry>, loading: Boolean, onRefresh: (
             Spacer(Modifier.height(8.dp))
         }
         if (!loading && files.isEmpty()) {
-            item { EmptyState(Icons.Default.Folder, "No files yet", "Ask Claude Code to create something in this project.") }
+            item { EmptyState(Icons.Default.Folder, "No files yet", "Ask your coding agent to create something in this project.") }
         }
         items(files, key = { it.path }) { entry ->
             Row(

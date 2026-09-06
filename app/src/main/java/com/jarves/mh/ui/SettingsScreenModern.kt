@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PrivacyTip
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -84,9 +85,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jarves.mh.BuildConfig
+import com.jarves.mh.model.AgentKind
+import com.jarves.mh.model.DEEPSEEK_HARNESS_PROVIDERS
 import com.jarves.mh.model.DevStack
 import com.jarves.mh.model.ProviderKind
 import com.jarves.mh.model.ProviderProfile
+import com.jarves.mh.model.providersForAgent
 import com.jarves.mh.network.ConnectionValidation
 import com.jarves.mh.network.DiscoveredModel
 import com.jarves.mh.network.ModelDiscoveryResult
@@ -94,7 +98,7 @@ import com.jarves.mh.ui.theme.AppThemeMode
 import com.jarves.mh.ui.theme.PocketOrange
 import kotlinx.coroutines.launch
 
-private enum class SettingsSection { CONNECTION, APPEARANCE, TOOLS, RUNTIME, UPDATE_CHANNEL }
+private enum class SettingsSection { AGENT, CONNECTION, APPEARANCE, TOOLS, RUNTIME, UPDATE_CHANNEL }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,6 +112,7 @@ fun SettingsScreen(
     onClearTerminal: () -> Unit,
     getSavedApiKey: (ProviderKind) -> String,
     onInstallDevStack: (DevStack) -> Unit = {},
+    onInstallAgent: (AgentKind) -> Unit = {},
     initialDebugUpdateManifestUrl: String = "",
     onSetDebugUpdateManifestUrl: (String) -> Unit = {},
     onClearDebugUpdateManifestUrl: () -> Unit = {},
@@ -118,6 +123,7 @@ fun SettingsScreen(
     var selectedKind by rememberSaveable(state.provider.kind) { mutableStateOf(state.provider.kind) }
     var baseUrl by rememberSaveable(state.provider.baseUrl) { mutableStateOf(state.provider.baseUrl) }
     var model by rememberSaveable(state.provider.model) { mutableStateOf(state.provider.model) }
+    var dshApi by rememberSaveable(state.provider.dshApi) { mutableStateOf(state.provider.dshApi) }
     var apiKey by rememberSaveable(state.provider.kind) { mutableStateOf(getSavedApiKey(state.provider.kind)) }
     var keyVisible by rememberSaveable { mutableStateOf(false) }
     var models by remember(baseUrl) { mutableStateOf(emptyList<DiscoveredModel>()) }
@@ -145,7 +151,9 @@ fun SettingsScreen(
         scope.launch {
             isDiscovering = true
             status = null
-            val profile = ProviderProfile(selectedKind, baseUrl.trim(), model.trim())
+            val kind = selectedKind
+            val url = if (kind.fixedBaseUrl) kind.defaultBaseUrl else baseUrl.trim()
+            val profile = ProviderProfile(kind, url, model.trim(), dshApi = dshApi)
             when (val result = onDiscoverModels(profile, apiKey.trim())) {
                 is ModelDiscoveryResult.Success -> {
                     models = result.models
@@ -270,6 +278,70 @@ fun SettingsScreen(
 
             item {
                 SettingsAccordion(
+                    title = "Coding agent",
+                    subtitle = state.agentKind.title + (state.agentMessage?.let { " · $it" } ?: ""),
+                    icon = Icons.Default.Psychology,
+                    expanded = expanded == SettingsSection.AGENT,
+                    onClick = { toggle(SettingsSection.AGENT) },
+                ) {
+                    AgentKind.entries.forEach { agent ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable(
+                                enabled = state.agentInstalling == null,
+                            ) { onInstallAgent(agent) }.padding(horizontal = 13.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(agent.title, fontWeight = FontWeight.Medium)
+                                    if (agent == AgentKind.DEEPSEEK_HARNESS) {
+                                        Spacer(Modifier.width(7.dp))
+                                        Surface(
+                                            color = PocketOrange.copy(alpha = 0.14f),
+                                            shape = RoundedCornerShape(50),
+                                        ) {
+                                            Text(
+                                                "Recommended",
+                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                                color = PocketOrange,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                            )
+                                        }
+                                    }
+                                }
+                                Text(
+                                    agent.subtitle + " · " + agent.downloadNote,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                )
+                                if (state.agentKind == agent && state.agentInstalling == null) {
+                                    Text(
+                                        "Active",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF58C9A3),
+                                    )
+                                }
+                                if (state.agentInstalling == agent) {
+                                    LinearProgressIndicator(
+                                        progress = { state.agentProgress.coerceIn(0f, 1f) },
+                                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                                    )
+                                    state.agentMessage?.let {
+                                        Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                            SelectionDot(state.agentKind == agent)
+                        }
+                    }
+                }
+            }
+
+            item {
+                SettingsAccordion(
                     title = "AI connection",
                     subtitle = "${state.provider.model.ifBlank { "No model" }} · ${state.provider.kind.title}",
                     icon = Icons.Default.SmartToy,
@@ -281,6 +353,7 @@ fun SettingsScreen(
                         selectedKind = selectedKind,
                         baseUrl = baseUrl,
                         model = model,
+                        dshApi = dshApi,
                         apiKey = apiKey,
                         keyVisible = keyVisible,
                         models = models,
@@ -293,12 +366,14 @@ fun SettingsScreen(
                             selectedKind = kind
                             baseUrl = kind.defaultBaseUrl
                             model = kind.defaultModel
+                            dshApi = "anthropic-messages"
                             apiKey = getSavedApiKey(kind)
                             models = emptyList()
                             status = null
                         },
                         onBaseUrl = { baseUrl = it; models = emptyList(); status = null },
                         onModel = { model = it; status = null },
+                        onDshApi = { dshApi = it; status = null },
                         onApiKey = { apiKey = it; status = null },
                         onToggleKey = { keyVisible = !keyVisible },
                         onModels = { if (models.isEmpty()) discoverModels() else showModels = true },
@@ -307,7 +382,9 @@ fun SettingsScreen(
                                 isValidating = true
                                 status = "Checking connection…"
                                 statusOk = true
-                                val profile = ProviderProfile(selectedKind, baseUrl.trim(), model.trim())
+                                val kind = selectedKind
+                                val url = if (kind.fixedBaseUrl) kind.defaultBaseUrl else baseUrl.trim()
+                                val profile = ProviderProfile(kind, url, model.trim(), dshApi = dshApi)
                                 when (val result = onValidateProvider(profile, apiKey.trim(), models)) {
                                     is ConnectionValidation.Success -> {
                                         status = result.message
@@ -537,6 +614,7 @@ private fun ConnectionSettings(
     selectedKind: ProviderKind,
     baseUrl: String,
     model: String,
+    dshApi: String,
     apiKey: String,
     keyVisible: Boolean,
     models: List<DiscoveredModel>,
@@ -548,11 +626,13 @@ private fun ConnectionSettings(
     onProvider: (ProviderKind) -> Unit,
     onBaseUrl: (String) -> Unit,
     onModel: (String) -> Unit,
+    onDshApi: (String) -> Unit,
     onApiKey: (String) -> Unit,
     onToggleKey: () -> Unit,
     onModels: () -> Unit,
     onValidate: () -> Unit,
 ) {
+    val visibleKinds = remember(state.agentKind) { providersForAgent(state.agentKind) }
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), shape = RoundedCornerShape(14.dp)) {
         Row(Modifier.fillMaxWidth().padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(8.dp).background(
@@ -580,7 +660,7 @@ private fun ConnectionSettings(
     Text("Provider", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
         Column {
-            ProviderKind.entries.forEachIndexed { index, kind ->
+            visibleKinds.forEachIndexed { index, kind ->
                 Row(
                     Modifier.fillMaxWidth().clickable { onProvider(kind) }.padding(horizontal = 13.dp, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -591,12 +671,39 @@ private fun ConnectionSettings(
                     }
                     SelectionDot(selectedKind == kind)
                 }
-                if (index != ProviderKind.entries.lastIndex) HorizontalDivider(Modifier.padding(start = 13.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+                if (index != visibleKinds.lastIndex) HorizontalDivider(Modifier.padding(start = 13.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
             }
         }
     }
 
-    OutlinedTextField(baseUrl, onBaseUrl, label = { Text("Base URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(
+        baseUrl,
+        onBaseUrl,
+        label = { Text("Base URL") },
+        supportingText = {
+            if (selectedKind.fixedBaseUrl) Text("Fixed by ${selectedKind.title}", fontSize = 11.sp)
+        },
+        readOnly = selectedKind.fixedBaseUrl,
+        enabled = !selectedKind.fixedBaseUrl,
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (state.agentKind == AgentKind.DEEPSEEK_HARNESS && selectedKind == ProviderKind.CUSTOM) {
+        Text("Gateway protocol", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
+            Column {
+                listOf("anthropic-messages", "openai-completions", "openai-responses").forEach { option ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onDshApi(option) }.padding(horizontal = 13.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(option, Modifier.weight(1f), fontSize = 13.sp)
+                        SelectionDot(dshApi == option)
+                    }
+                }
+            }
+        }
+    }
     OutlinedTextField(model, onModel, label = { Text("Model name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
     OutlinedButton(onClick = onModels, enabled = baseUrl.isNotBlank() && apiKey.isNotBlank() && !isDiscovering, modifier = Modifier.fillMaxWidth().height(50.dp)) {
         if (isDiscovering) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)

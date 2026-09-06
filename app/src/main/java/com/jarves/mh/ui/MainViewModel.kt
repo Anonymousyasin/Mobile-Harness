@@ -14,6 +14,7 @@ import com.jarves.mh.BuildConfig
 import com.jarves.mh.data.ApiKeyVault
 import com.jarves.mh.data.AppPreferences
 import com.jarves.mh.model.ActivityItem
+import com.jarves.mh.model.AgentKind
 import com.jarves.mh.model.ChangeItem
 import com.jarves.mh.model.ChatMessage
 import com.jarves.mh.model.ChatAttachment
@@ -32,6 +33,7 @@ import com.jarves.mh.network.ConnectionValidation
 import com.jarves.mh.network.ModelDiscoveryResult
 import com.jarves.mh.network.ProviderApiClient
 import com.jarves.mh.runtime.ClaudeRuntimeBridge
+import com.jarves.mh.runtime.DshRuntimeBridge
 import com.jarves.mh.runtime.NativeSpawnProcess
 import com.jarves.mh.runtime.RuntimeInstallProgress
 import com.jarves.mh.runtime.RuntimeInstaller
@@ -147,6 +149,10 @@ data class AppUiState(
     val devStackMessage: String? = null,
     val devStackProgress: Float = 0f,
     val devStackBytes: Pair<Long, Long>? = null,
+    val agentKind: AgentKind = AgentKind.CLAUDE_CODE,
+    val agentInstalling: AgentKind? = null,
+    val agentMessage: String? = null,
+    val agentProgress: Float = 0f,
     val androidBuildRunning: Boolean = false,
     val androidBuildMessage: String? = null,
     val appUpdate: AppUpdateInfo? = null,
@@ -159,7 +165,10 @@ data class AppUiState(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val vault = ApiKeyVault(application)
     private val preferences = AppPreferences(application)
-    private val runtime = ClaudeRuntimeBridge(application) { profile -> vault.get(profile.kind.name) }
+    private val claudeRuntime = ClaudeRuntimeBridge(application) { profile -> vault.get(profile.kind.name) }
+    private val dshRuntime = DshRuntimeBridge(application) { profile -> vault.get(profile.kind.name) }
+    private fun activeRuntime(): com.jarves.mh.runtime.RuntimeBridge =
+        if (_state.value.agentKind == AgentKind.DEEPSEEK_HARNESS) dshRuntime else claudeRuntime
     private val installer = RuntimeInstaller(application)
     private val providerApi = ProviderApiClient()
     private fun appUpdater(): AppUpdater = AppUpdater(
@@ -171,11 +180,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var projectTerminalProjectId: String? = null
     @Volatile private var projectTerminalStopRequested: Boolean = false
     @Volatile private var setupCompletionHandled: Boolean = false
+    private val initialAgentKind = runCatching { AgentKind.valueOf(preferences.agentKind) }
+        .getOrDefault(AgentKind.CLAUDE_CODE)
     private val _state = MutableStateFlow(
         AppUiState(
             onboardingComplete = preferences.onboardingComplete,
             backgroundSetupComplete = preferences.backgroundSetupComplete,
-            provider = preferences.loadProvider(vault),
+            agentKind = initialAgentKind,
+            provider = preferences.loadProvider(vault, initialAgentKind),
             themeMode = runCatching { com.jarves.mh.ui.theme.AppThemeMode.valueOf(preferences.themeMode.uppercase()) }
                 .getOrDefault(com.jarves.mh.ui.theme.AppThemeMode.DARK),
             projects = preferences.loadProjects(),
@@ -187,6 +199,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         RuntimeSetupController.restore(application)
+        viewModelScope.launch { dshRuntime.events.collect(::onRuntimeEvent) }
         if (!preferences.legacySeededCredentialRemoved) {
             vault.remove(ProviderKind.CUSTOM.name)
             preferences.legacySeededCredentialRemoved = true
@@ -207,7 +220,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 hasSecret = true,
             )
             vault.put(ProviderKind.CUSTOM.name, BuildConfig.TEST_OPENROUTER_API_KEY)
-            preferences.saveProvider(testProvider)
+            preferences.saveProvider(testProvider, _state.value.agentKind)
             preferences.testProviderDefaultsVersion = TEST_PROVIDER_DEFAULTS_VERSION
             _state.update { it.copy(provider = testProvider) }
         }
@@ -346,6 +359,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun requestProjectTerminalCommand(command: String) {
         val normalized = command.trim()
         if (normalized.isBlank() || _state.value.projectTerminalRunning || projectTerminalProcess?.isAlive == true) return
+        if (requiresAndroidToolchain(normalized) && !installer.isStackInstalled(DevStack.ANDROID)) {
+            _state.update {
+                it.copy(toastMessage = "Android build tools are not installed. Add Android in Settings → Development stacks.")
+            }
+            return
+        }
         if (isDestructiveTerminalCommand(normalized)) {
             _state.update { it.copy(pendingTerminalCommand = normalized) }
         } else {
@@ -675,6 +694,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun buildAndRunAndroidApp() {
         val project = _state.value.activeProject ?: return
         if (_state.value.androidBuildRunning) return
+        if (!installer.isStackInstalled(DevStack.ANDROID)) {
+            _state.update {
+                it.copy(toastMessage = "Android build tools are not installed. Add Android in Settings → Development stacks.")
+            }
+            return
+        }
         if (_state.value.isRunning) {
             _state.update { it.copy(toastMessage = "Wait for Claude to finish creating the project before building.") }
             return
@@ -741,6 +766,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
     }
 
+    private fun requiresAndroidToolchain(command: String): Boolean =
+        Regex("(?m)(^|[;&|]\\s*)(?:\\./)?gradle(?:w)?(?:\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(command)
+
 
     fun toggleTheme() {
         val next = if (_state.value.themeMode == com.jarves.mh.ui.theme.AppThemeMode.DARK) {
@@ -758,9 +786,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun getSavedApiKey(kind: ProviderKind): String = vault.get(kind.name).orEmpty()
 
+    /** Keeps both agent bridges mapped to the same workspace root; the active one is used. */
+    private fun configureBridgeRoots(projectId: String, rootPath: String) {
+        claudeRuntime.configureProjectRoot(projectId, rootPath)
+        dshRuntime.configureProjectRoot(projectId, rootPath)
+    }
+
     init {
         viewModelScope.launch { RuntimeSetupController.snapshot.collect(::onSetupSnapshot) }
-        viewModelScope.launch { runtime.events.collect(::onRuntimeEvent) }
+        viewModelScope.launch { claudeRuntime.events.collect(::onRuntimeEvent) }
         viewModelScope.launch { bootstrap() }
     }
 
@@ -823,7 +857,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             getApplication(),
             Intent(getApplication(), RuntimeSetupService::class.java)
                 .setAction(RuntimeSetupService.ACTION_START)
-                .putExtra(RuntimeSetupService.EXTRA_STACKS, stacks),
+                .putExtra(RuntimeSetupService.EXTRA_STACKS, stacks)
+                .putExtra(RuntimeSetupService.EXTRA_AGENT, _state.value.agentKind.name),
         )
     }
 
@@ -1029,7 +1064,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val saved = profile.copy(
             hasSecret = secret.isNotBlank() || vault.contains(profile.kind.name) || profile.kind == ProviderKind.CLAUDE,
         )
-        preferences.saveProvider(saved)
+        preferences.saveProvider(saved, _state.value.agentKind)
         preferences.onboardingComplete = true
         _state.update { it.copy(onboardingComplete = true, provider = saved, startupStage = StartupStage.READY) }
         pingApi()
@@ -1040,6 +1075,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun finishBackgroundSetup() {
         preferences.backgroundSetupComplete = true
         _state.update { it.copy(backgroundSetupComplete = true) }
+    }
+
+    /** Called from the first-launch setup screen; persists the agent choice for setup and Settings. */
+    fun selectAgent(kind: AgentKind) {
+        if (_state.value.agentKind == kind) return
+        preferences.agentKind = kind.name
+        _state.update { current ->
+            preferences.saveProvider(current.provider, current.agentKind)
+            current.copy(agentKind = kind, provider = preferences.loadProvider(vault, kind))
+        }
+    }
+
+    /** Installs the other agent on demand (Settings) with live progress, then switches to it. */
+    fun installAgent(kind: AgentKind) {
+        if (_state.value.agentInstalling != null || _state.value.agentKind == kind && installer.isAgentInstalled(kind)) return
+        preferences.agentKind = kind.name
+        _state.update { current ->
+            preferences.saveProvider(current.provider, current.agentKind)
+            val provider = preferences.loadProvider(vault, kind)
+            current.copy(
+                agentKind = kind,
+                provider = provider,
+                agentInstalling = kind,
+                agentMessage = "Preparing ${kind.title}…",
+                agentProgress = 0f,
+            )
+        }
+        viewModelScope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    installer.ensureAgentInstalled(kind) { progress ->
+                        _state.update { current ->
+                            current.copy(
+                                agentMessage = progress.message,
+                                agentProgress = progress.fraction.coerceIn(0f, 1f),
+                            )
+                        }
+                    }
+                }
+            }
+            result.onSuccess { preferences.dshVersion = installer.dshVersion }
+            _state.update { current ->
+                current.copy(
+                    agentInstalling = null,
+                    agentProgress = 0f,
+                    agentMessage = result.fold(
+                        onSuccess = { "${kind.title} is ready" },
+                        onFailure = { _ -> result.exceptionOrNull()?.message?.take(200) ?: "Could not install ${kind.title}" },
+                    ),
+                )
+            }
+        }
     }
 
     /** Called from the first-launch tool picker; persists the choice for setup and Settings. */
@@ -1128,7 +1215,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openProject(project: Project) {
-        runtime.configureProjectRoot(project.id, project.rootPath)
+        configureBridgeRoots(project.id, project.rootPath)
         val terminal = loadProjectTerminal(project)
         val suggestedRoot = if (project.rootPath.isBlank()) detectNestedProjectRoot(project) else null
         val chats = preferences.loadProjectChats(project.id).ifEmpty {
@@ -1166,7 +1253,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         refreshProjectFiles()
         viewModelScope.launch {
-            val pending = runtime.loadPendingChanges(project.id)
+            val pending = activeRuntime().loadPendingChanges(project.id)
             if (_state.value.activeProject?.id == project.id) _state.update { it.copy(changes = pending) }
         }
     }
@@ -1175,7 +1262,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val active = _state.value.activeProject
         persistMessages()
         if (_state.value.isRunning) {
-            viewModelScope.launch { runtime.stopActiveSession() }
+            viewModelScope.launch { activeRuntime().stopActiveSession() }
         }
         if (_state.value.projectTerminalRunning) stopProjectTerminalCommand()
 
@@ -1243,7 +1330,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             language = "TypeScript",
             slug = slug,
         )
-        runtime.configureProjectRoot(project.id, project.rootPath)
+        configureBridgeRoots(project.id, project.rootPath)
         val guestRoot = projectGuestRoot(project)
         _state.update {
             it.copy(
@@ -1342,7 +1429,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val root = current.suggestedProjectRoot ?: return
         if (current.isRunning || current.projectTerminalRunning) return
         val updated = project.copy(rootPath = root)
-        runtime.configureProjectRoot(updated.id, updated.rootPath)
+        configureBridgeRoots(updated.id, updated.rootPath)
         val projects = current.projects.map { if (it.id == updated.id) updated else it }
         val guestRoot = projectGuestRoot(updated)
         preferences.saveProjects(projects)
@@ -1688,6 +1775,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendPrompt(prompt: String) {
         val project = state.value.activeProject ?: return
+        if (_state.value.agentKind == AgentKind.DEEPSEEK_HARNESS && _state.value.provider.kind == ProviderKind.CLAUDE) {
+            _state.update { it.copy(toastMessage = "Claude subscription login is not supported by DeepSeek Harness — pick a key-based provider in Settings.") }
+            return
+        }
         val attachments = state.value.pendingAttachments
         if ((prompt.isBlank() && attachments.isEmpty()) || state.value.isRunning) return
         val requestText = prompt.trim().ifBlank { "Please review the attached files." }
@@ -1699,7 +1790,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 pendingAttachments = emptyList(),
                 isRunning = true,
                 activity = listOf(ActivityItem("Understanding your request", "Preparing a safe plan", false)) + it.activity,
-                liveProcess = listOf(ActivityItem("Think", requestPlanningSummary(requestText), false)),
+                liveProcess = listOf(ActivityItem("Think", requestPlanningSummary(requestText, it.agentKind), false)),
                 liveThinking = true,
                 activeThinkingBlockId = null,
                 taskStartedAtMillis = startedAt,
@@ -1722,24 +1813,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             appendLine("</attached_files>")
         }
         viewModelScope.launch {
-            runtime.startSession(project.id, project.slug, project.kind, runtimePrompt, history, state.value.provider)
+            activeRuntime().startSession(project.id, project.slug, project.kind, runtimePrompt, history, state.value.provider)
         }
     }
 
     fun answerApproval(approved: Boolean) {
         val request = state.value.pendingApproval ?: return
-        viewModelScope.launch { runtime.respondToApproval(request, approved) }
+        viewModelScope.launch { activeRuntime().respondToApproval(request, approved) }
     }
 
     fun stopTask() {
         if (!_state.value.isRunning) return
-        viewModelScope.launch { runtime.stopActiveSession() }
+        viewModelScope.launch { activeRuntime().stopActiveSession() }
     }
 
     fun undoLastChanges() {
         val project = _state.value.activeProject ?: return
         viewModelScope.launch {
-            val restored = runtime.undoLastChanges(project.id)
+            val restored = activeRuntime().undoLastChanges(project.id)
             _state.update { current ->
                 current.copy(
                     changes = if (restored) emptyList() else current.changes,
@@ -1758,7 +1849,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun keepLastChanges() {
         val project = _state.value.activeProject ?: return
         viewModelScope.launch {
-            runtime.acceptLastChanges(project.id)
+            activeRuntime().acceptLastChanges(project.id)
             _state.update {
                 it.copy(
                     changes = emptyList(),
@@ -1771,7 +1862,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun undoFileChange(path: String) {
         val project = _state.value.activeProject ?: return
         viewModelScope.launch {
-            if (runtime.undoFileChange(project.id, path)) {
+            if (activeRuntime().undoFileChange(project.id, path)) {
                 _state.update { current -> current.copy(changes = current.changes.filterNot { it.path == path }) }
                 refreshProjectFiles()
             }
@@ -1781,7 +1872,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun keepFileChange(path: String) {
         val project = _state.value.activeProject ?: return
         viewModelScope.launch {
-            if (runtime.acceptFileChange(project.id, path)) {
+            if (activeRuntime().acceptFileChange(project.id, path)) {
                 _state.update { current -> current.copy(changes = current.changes.filterNot { it.path == path }) }
             }
         }
@@ -1817,15 +1908,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun requestPlanningSummary(request: String, toolName: String? = null, detail: String = ""): String {
+    private fun requestPlanningSummary(
+        request: String,
+        agentKind: AgentKind,
+        toolName: String? = null,
+        detail: String = "",
+    ): String {
+        val agentName = agentKind.title
         val cleanRequest = request.replace(Regex("\\s+"), " ").trim().take(110)
         val requestPart = if (cleanRequest.isBlank()) {
-            "Claude is reviewing the request"
+            "$agentName is reviewing the request"
         } else {
             "The user is asking: “$cleanRequest”"
         }
         return if (toolName == null) {
-            "$requestPart. Claude is deciding the next useful step."
+            "$requestPart. $agentName is deciding the next useful step."
         } else {
             "$requestPart. ${toolPlanSummary(toolName, detail)}."
         }
@@ -1895,7 +1992,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val reasoning = ActivityItem(
                         title = "Think",
                         detail = current.liveProcess.getOrNull(existingIndex)?.detail
-                            ?: requestPlanningSummary(current.currentTaskRequest.orEmpty()),
+                            ?: requestPlanningSummary(current.currentTaskRequest.orEmpty(), current.agentKind),
                         isComplete = false,
                     )
                     val process = if (existingIndex >= 0) {

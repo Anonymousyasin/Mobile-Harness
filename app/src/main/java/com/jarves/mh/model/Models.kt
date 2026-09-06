@@ -15,13 +15,62 @@ enum class ProviderKind(
     val defaultBaseUrl: String,
     val defaultModel: String,
     val experimental: Boolean = false,
+    val fixedBaseUrl: Boolean = false,
+    val fixedProtocol: Boolean = false,
 ) {
     CLAUDE("Claude subscription", "Pro, Max, Team or Enterprise", ProviderProtocol.CLAUDE_LOGIN, "", "default"),
     ANTHROPIC("Anthropic API", "Usage billed through Console", ProviderProtocol.ANTHROPIC, "https://api.anthropic.com", "claude-sonnet-4-6"),
     LLM_ROUTER("OpenRouter", "Use your OpenRouter API key", ProviderProtocol.OPENROUTER, "https://openrouter.ai/api", "~anthropic/claude-sonnet-latest"),
     DEEPSEEK("DeepSeek", "Use your DeepSeek API key", ProviderProtocol.ANTHROPIC_GATEWAY, "https://api.deepseek.com/anthropic", "deepseek-v4-flash"),
     KIMI("Kimi", "Anthropic-compatible endpoint", ProviderProtocol.ANTHROPIC_GATEWAY, "https://api.moonshot.ai/anthropic", "kimi-k2.6", true),
+    OPENCODE_ZEN(
+        "OpenCode Zen · DeepSeek",
+        "DeepSeek via OpenCode Zen gateway",
+        ProviderProtocol.OPENAI_RESPONSES,
+        "https://opencode.ai/zen/v1",
+        "deepseek-v4-flash",
+        fixedBaseUrl = true,
+        fixedProtocol = true,
+    ),
     CUSTOM("Custom API", "Anthropic-compatible endpoint", ProviderProtocol.ANTHROPIC_GATEWAY, "", "", true),
+}
+
+/**
+ * Coding agent engine installed in the private Linux runtime.
+ * CLAUDE_CODE is the pre-existing default; DEEPSEEK_HARNESS is the
+ * official DeepSeek Harness (`dsh`) installed on demand.
+ */
+enum class AgentKind(
+    val title: String,
+    val subtitle: String,
+    val downloadNote: String,
+) {
+    CLAUDE_CODE(
+        "Claude Code",
+        "Anthropic's coding agent · broad provider support",
+        "Included in the Core runtime",
+    ),
+    DEEPSEEK_HARNESS(
+        "DeepSeek Harness",
+        "Official DeepSeek coding agent · API-key providers",
+        "Additional ~28 MB runtime bundle",
+    ),
+}
+
+/** Provider kinds usable with [AgentKind.DEEPSEEK_HARNESS]. Claude OAuth login has no dsh equivalent. */
+val DEEPSEEK_HARNESS_PROVIDERS: Set<ProviderKind> = setOf(
+    ProviderKind.DEEPSEEK,
+    ProviderKind.ANTHROPIC,
+    ProviderKind.LLM_ROUTER,
+    ProviderKind.KIMI,
+    ProviderKind.OPENCODE_ZEN,
+    ProviderKind.CUSTOM,
+)
+
+/** Provider choices shown for the selected coding agent. */
+fun providersForAgent(agent: AgentKind): List<ProviderKind> = when (agent) {
+    AgentKind.DEEPSEEK_HARNESS -> ProviderKind.entries.filter { it in DEEPSEEK_HARNESS_PROVIDERS }
+    AgentKind.CLAUDE_CODE -> ProviderKind.entries.filterNot { it == ProviderKind.OPENCODE_ZEN }
 }
 
 data class ProviderProfile(
@@ -29,7 +78,12 @@ data class ProviderProfile(
     val baseUrl: String = kind.defaultBaseUrl,
     val model: String = kind.defaultModel,
     val hasSecret: Boolean = false,
-)
+    /** dsh custom-route wire protocol for CUSTOM: anthropic-messages | openai-completions | openai-responses. */
+    val dshApi: String = "anthropic-messages",
+) {
+    /** Effective base URL: fixed kinds always resolve to their constant, ignoring stored drift. */
+    val resolvedBaseUrl: String get() = if (kind.fixedBaseUrl) kind.defaultBaseUrl else baseUrl
+}
 
 enum class ProjectKind { PROJECT, QUICK_PROJECT }
 

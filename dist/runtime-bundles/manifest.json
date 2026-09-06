@@ -40,6 +40,24 @@
         "Offline Maven repository",
         "Global ARM64 AAPT2 override"
       ]
+    },
+    "dsh": {
+      "version": "2026.09.1",
+      "file": "pocketdev-dsh-arm64-2026.09.1.tar.zst",
+      "sha256": "88e6a23ba74e1cd74a2c923b7e0d6bd78ba4b7e5f8a9b649f12bf4ffe158cce5",
+      "compressedBytes": 27752194,
+      "uncompressedBytes": 249456640,
+      "includes": [
+        "DeepSeek Harness 0.1.2-rc.1",
+        "Pinned npm dependency tree",
+        "DeepSeek Harness launcher"
+      ],
+      "excludes": [
+        "API keys",
+        "Provider settings",
+        "Sessions",
+        "Chats and projects"
+      ]
     }
   }
 }
