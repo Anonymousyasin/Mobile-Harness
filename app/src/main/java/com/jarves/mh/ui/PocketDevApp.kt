@@ -414,7 +414,7 @@ private fun BackgroundTaskSetupScreen(
             Text("Prepare for reliable setup", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Initial setup usually takes 10–12 minutes. You may leave Mobile Harness in the background while it works.",
+                "Setup time depends on the toolchains you choose next. You may leave Mobile Harness in the background while it works.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
@@ -988,6 +988,28 @@ private const val CORE_RUNTIME_DOWNLOAD_MB = 149
 private const val PYTHON_RUNTIME_DOWNLOAD_MB = 55
 private const val ANDROID_RUNTIME_DOWNLOAD_MB = 570
 
+private fun setupTimeEstimate(selected: Set<DevStack>): String {
+    var minimumMinutes = 3
+    var maximumMinutes = 5
+    if (DevStack.PYTHON in selected) {
+        minimumMinutes += 1
+        maximumMinutes += 2
+    }
+    if (DevStack.ANDROID in selected) {
+        minimumMinutes += 7
+        maximumMinutes += 10
+    }
+    if (DevStack.CPP in selected) {
+        minimumMinutes += 3
+        maximumMinutes += 5
+    }
+    if (DevStack.PHP in selected) {
+        minimumMinutes += 2
+        maximumMinutes += 4
+    }
+    return "$minimumMinutes–$maximumMinutes minutes"
+}
+
 private fun stackDownloadLabel(stack: DevStack): String = when {
     stack == DevStack.WEB -> " · included"
     BuildConfig.OFFLINE_RUNTIME_BUNDLES && stack in setOf(DevStack.PYTHON, DevStack.ANDROID) -> " · included"
@@ -1208,7 +1230,7 @@ private fun StartupLoadingScreen(
                     Spacer(Modifier.height(10.dp))
                     Row(Modifier.fillMaxWidth().height(18.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (installing) "Usually 10–12 minutes" else "Starting local tools",
+                            if (installing) "Estimated ${setupTimeEstimate(state.selectedDevStacks)}" else "Starting local tools",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.5.sp,
                         )
@@ -1478,6 +1500,7 @@ private fun RootScreenHost(
                     onSettings = { screen = RootScreen.SETTINGS },
                     onPing = viewModel::pingApi,
                     onToggleTheme = viewModel::toggleTheme,
+                    onInstallUpdate = viewModel::installAppUpdate,
                 )
                 RootScreen.TERMINAL -> TerminalScreen(
                     lines = terminalLines,
@@ -1576,12 +1599,8 @@ private fun ProviderSetupScreen(
                     onSelected = {
                         if (selected != it) {
                             selected = it
-                            baseUrl = if (it == ProviderKind.CUSTOM || it == ProviderKind.ANTHROPIC) {
-                                "https://api.deepseek.com/anthropic"
-                            } else {
-                                it.defaultBaseUrl
-                            }
-                            model = if (it == ProviderKind.CUSTOM) "deepseek-chat" else it.defaultModel
+                            baseUrl = it.defaultBaseUrl
+                            model = it.defaultModel
                             apiKey = ""
                         }
                     },
@@ -1760,15 +1779,15 @@ private fun ProviderChoiceRow(
         ProviderKind.CLAUDE -> Color(0xFFD97757)
         ProviderKind.ANTHROPIC -> Color(0xFFE7A26D)
         ProviderKind.LLM_ROUTER -> Color(0xFF5B8DEF)
-        ProviderKind.OPENAI -> Color(0xFF19A77C)
+        ProviderKind.DEEPSEEK -> Color(0xFF4D6BFE)
         ProviderKind.KIMI -> Color(0xFF8B7CF6)
         ProviderKind.CUSTOM -> PocketOrange
     }
     val mark = when (provider) {
         ProviderKind.CLAUDE -> "C"
         ProviderKind.ANTHROPIC -> "A"
-        ProviderKind.LLM_ROUTER -> "LR"
-        ProviderKind.OPENAI -> "O"
+        ProviderKind.LLM_ROUTER -> "OR"
+        ProviderKind.DEEPSEEK -> "DS"
         ProviderKind.KIMI -> "K"
         ProviderKind.CUSTOM -> "<>"
     }
@@ -1952,7 +1971,10 @@ private fun ProviderCredentialsStep(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column(Modifier.weight(1f)) {
-                                    Text(option.displayName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(option.displayName, modifier = Modifier.weight(1f, fill = false), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        if (option.isFree) Text("  FREE", color = Color(0xFF58C99C), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
                                     if (option.displayName != option.id) {
                                         Text(option.id, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
@@ -2113,10 +2135,19 @@ private fun ProjectsScreen(
     onSettings: () -> Unit,
     onPing: () -> Unit,
     onToggleTheme: () -> Unit,
+    onInstallUpdate: () -> Unit,
 ) {
     var showCreate by rememberSaveable { mutableStateOf(false) }
+    var showUpdateDialog by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
     val projects = state.projects
+    val context = LocalContext.current
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        onInstallUpdate()
+    }
+    LaunchedEffect(state.appUpdate?.versionCode) {
+        if (state.appUpdate != null) showUpdateDialog = true
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -2182,6 +2213,28 @@ private fun ProjectsScreen(
                             maxLines = 1,
                             softWrap = false,
                         )
+                    }
+                }
+            }
+            state.appUpdate?.let { update ->
+                item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().clickable { showUpdateDialog = true },
+                        shape = RoundedCornerShape(20.dp),
+                        color = PocketOrange.copy(alpha = 0.11f),
+                        border = BorderStroke(1.dp, PocketOrange.copy(alpha = 0.45f)),
+                    ) {
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Surface(shape = CircleShape, color = PocketOrange.copy(alpha = 0.18f), modifier = Modifier.size(46.dp)) {
+                                Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Download, null, tint = PocketOrange) }
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Mobile Harness ${update.versionName}", fontWeight = FontWeight.Bold)
+                                Text("A new update is ready", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text("Update", color = PocketOrange, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
                     }
                 }
             }
@@ -2264,6 +2317,63 @@ private fun ProjectsScreen(
         confirmButton = { TextButton(onClick = { onCreate(name); showCreate = false; name = "" }, enabled = name.isNotBlank()) { Text("Create") } },
         dismissButton = { TextButton(onClick = { showCreate = false }) { Text("Cancel") } },
     )
+    val update = state.appUpdate
+    if (showUpdateDialog && update != null) {
+        val canInstall = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
+        val downloading = state.appUpdateStatus == AppUpdateStatus.DOWNLOADING
+        val installing = state.appUpdateStatus == AppUpdateStatus.INSTALLING
+        val total = state.appUpdateTotalBytes
+        val downloaded = state.appUpdateDownloadedBytes
+        val progress = if (total > 0) (downloaded.toFloat() / total).coerceIn(0f, 1f) else 0f
+        AlertDialog(
+            onDismissRequest = { if (!installing) showUpdateDialog = false },
+            icon = { Icon(Icons.Default.Download, null, tint = PocketOrange, modifier = Modifier.size(34.dp)) },
+            title = { Text("Update to ${update.versionName}", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(update.notes.ifBlank { "Get the latest improvements and fixes for Mobile Harness." })
+                    if (update.sizeBytes > 0) Text("Download size: ${formatMegabytes(update.sizeBytes)}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                    if (!canInstall) {
+                        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f)) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+                                Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Allow ‘Install unknown apps’ for Mobile Harness. Without this permission, Android will not install the update.", fontSize = 13.sp)
+                            }
+                        }
+                    }
+                    if (downloading) {
+                        if (total > 0) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                        else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(
+                            if (total > 0) "Downloading ${formatMegabytes(downloaded)} / ${formatMegabytes(total)} · ${(progress * 100).toInt()}%" else "Downloading ${formatMegabytes(downloaded)}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (installing) Text("Download verified. Opening Android installer…", color = PocketGreen, fontSize = 13.sp)
+                    state.appUpdateError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !downloading && !installing,
+                    onClick = {
+                        if (!canInstall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            permissionLauncher.launch(
+                                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")),
+                            )
+                        } else {
+                            onInstallUpdate()
+                        }
+                    },
+                ) {
+                    Text(when { !canInstall -> "Grant permission"; downloading -> "Downloading…"; installing -> "Installing…"; else -> "Download and install" })
+                }
+            },
+            dismissButton = { if (!installing) TextButton(onClick = { showUpdateDialog = false }) { Text("Later") } },
+        )
+    }
 }
 
 @Composable

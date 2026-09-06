@@ -108,6 +108,7 @@ class ClaudeRuntimeBridge(
             return@withContext sessionId
         }
 
+        var formatGateway: LocalFormatGateway? = null
         runCatching {
             RuntimeTaskController.stopAction = {
                 userStopRequested = true
@@ -129,7 +130,11 @@ class ClaudeRuntimeBridge(
             val workspace = ensureWorkspace(projectId)
             createCheckpoint(projectId, workspace)
             val before = snapshot(workspace)
-            val launch = RuntimeLaunchConfigBuilder.build(provider, authToken = secret)
+            formatGateway = if (provider.kind.protocol in setOf(
+                    com.jarves.mh.model.ProviderProtocol.OPENAI_CHAT,
+                    com.jarves.mh.model.ProviderProtocol.OPENAI_RESPONSES,
+                )) LocalFormatGateway(provider, secret).start() else null
+            val launch = RuntimeLaunchConfigBuilder.build(provider, authToken = secret, localGatewayUrl = formatGateway?.url)
             Log.d("ClaudeBridge", "Provider: ${provider.kind}, Model: ${provider.model}, BaseUrl: ${provider.baseUrl}")
             Log.d("ClaudeBridge", "Launch environment keys: ${launch.environment.keys}")
 
@@ -147,7 +152,7 @@ class ClaudeRuntimeBridge(
                 add("--include-partial-messages")
                 add("--verbose")
                 add("--model")
-                add(provider.model)
+                add(launch.environment["ANTHROPIC_MODEL"] ?: provider.model)
                 add("--max-turns")
                 add("25")
             }
@@ -250,6 +255,7 @@ class ClaudeRuntimeBridge(
                 )
             }
         }
+        formatGateway?.close()
         activeProcess = null
         activeSessionId = null
         RuntimeTaskController.stopAction = null

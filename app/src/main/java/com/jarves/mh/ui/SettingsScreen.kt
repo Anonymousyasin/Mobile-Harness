@@ -416,12 +416,8 @@ private fun LegacySettingsScreen(
                                 .clickable {
                                     if (selectedKind != kind) {
                                         selectedKind = kind
-                                        baseUrl = if (kind == ProviderKind.CUSTOM || kind == ProviderKind.ANTHROPIC) {
-                                            "https://api.deepseek.com/anthropic"
-                                        } else {
-                                            kind.defaultBaseUrl
-                                        }
-                                        model = if (kind == ProviderKind.CUSTOM) "deepseek-chat" else kind.defaultModel
+                                        baseUrl = kind.defaultBaseUrl
+                                        model = kind.defaultModel
                                         val saved = getSavedApiKey(kind)
                                         apiKey = saved
                                         validationStatus = null

@@ -27,6 +27,8 @@ val hasUploadSigning = listOf(
 ).all { !it.isNullOrBlank() }
 val runtimeReleaseBaseUrl =
     "https://github.com/techjarves/Mobile-Harness/releases/download/runtime-2026.09.4"
+val appUpdateManifestUrl =
+    "https://github.com/techjarves/Mobile-Harness/releases/latest/download/mobile-harness-update.json"
 val runtimeBundleDir = rootProject.layout.projectDirectory.dir("dist/runtime-bundles")
 val generatedRuntimeAssets = layout.buildDirectory.dir("generated/runtime-assets")
 
@@ -94,11 +96,15 @@ android {
             dimension = "runtimeDelivery"
             buildConfigField("boolean", "OFFLINE_RUNTIME_BUNDLES", "false")
             buildConfigField("String", "RUNTIME_RELEASE_BASE_URL", buildConfigString(runtimeReleaseBaseUrl))
+            buildConfigField("String", "APP_UPDATE_MANIFEST_URL", buildConfigString(appUpdateManifestUrl))
+            buildConfigField("String", "APP_VARIANT", "\"online\"")
         }
         create("offline") {
             dimension = "runtimeDelivery"
             buildConfigField("boolean", "OFFLINE_RUNTIME_BUNDLES", "true")
             buildConfigField("String", "RUNTIME_RELEASE_BASE_URL", buildConfigString(runtimeReleaseBaseUrl))
+            buildConfigField("String", "APP_UPDATE_MANIFEST_URL", buildConfigString(appUpdateManifestUrl))
+            buildConfigField("String", "APP_VARIANT", "\"offline\"")
         }
     }
 

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.os.SystemClock
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.ContextCompat
@@ -39,6 +40,8 @@ import com.jarves.mh.runtime.RuntimeSetupService
 import com.jarves.mh.runtime.RuntimeSetupSnapshot
 import com.jarves.mh.runtime.RuntimeSetupStatus
 import com.jarves.mh.runtime.AndroidAppInstaller
+import com.jarves.mh.update.AppUpdateInfo
+import com.jarves.mh.update.AppUpdater
 import java.io.File
 import java.io.RandomAccessFile
 import java.net.UnknownHostException
@@ -60,6 +63,7 @@ import org.json.JSONObject
 enum class StartupStage { CHECKING, SETUP_REQUIRED, INSTALLING, MODEL_SETUP, INITIALIZING, READY, ERROR }
 
 enum class ApiPingStatus { IDLE, PINGING, OK, FAILED }
+enum class AppUpdateStatus { AVAILABLE, PERMISSION_REQUIRED, DOWNLOADING, INSTALLING, ERROR }
 
 data class TerminalOutputLine(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -99,6 +103,7 @@ data class AppUiState(
     val provider: ProviderProfile = ProviderProfile(ProviderKind.ANTHROPIC),
     val themeMode: com.jarves.mh.ui.theme.AppThemeMode = com.jarves.mh.ui.theme.AppThemeMode.DARK,
     val apiPingStatus: ApiPingStatus = ApiPingStatus.IDLE,
+    val apiPingMessage: String? = null,
     val projects: List<Project> = emptyList(),
     val activeProject: Project? = null,
     val projectChats: List<ProjectChat> = emptyList(),
@@ -144,6 +149,11 @@ data class AppUiState(
     val devStackBytes: Pair<Long, Long>? = null,
     val androidBuildRunning: Boolean = false,
     val androidBuildMessage: String? = null,
+    val appUpdate: AppUpdateInfo? = null,
+    val appUpdateStatus: AppUpdateStatus? = null,
+    val appUpdateDownloadedBytes: Long = 0L,
+    val appUpdateTotalBytes: Long = -1L,
+    val appUpdateError: String? = null,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -152,6 +162,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val runtime = ClaudeRuntimeBridge(application) { profile -> vault.get(profile.kind.name) }
     private val installer = RuntimeInstaller(application)
     private val providerApi = ProviderApiClient()
+    private val appUpdater = AppUpdater(application)
     @Volatile private var projectTerminalProcess: Process? = null
     @Volatile private var terminalProcess: Process? = null
     @Volatile private var projectTerminalProjectId: String? = null
@@ -903,9 +914,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (remaining > 0) delay(remaining)
             _state.update { it.copy(startupStage = StartupStage.READY, startupProgress = 1f) }
             pingApi()
+            checkForAppUpdate()
         } else {
             showStartupError(result.exceptionOrNull() ?: IllegalStateException("Claude Code initialization failed"))
         }
+    }
+
+    fun checkForAppUpdate(force: Boolean = false) {
+        if (!force && System.currentTimeMillis() - preferences.lastAppUpdateCheckMillis < 24L * 60L * 60L * 1000L) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val update = runCatching { appUpdater.check() }.getOrNull()
+            preferences.lastAppUpdateCheckMillis = System.currentTimeMillis()
+            if (update != null) {
+                _state.update {
+                    it.copy(appUpdate = update, appUpdateStatus = AppUpdateStatus.AVAILABLE, appUpdateError = null)
+                }
+            }
+        }
+    }
+
+    fun installAppUpdate() {
+        val info = _state.value.appUpdate ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getApplication<Application>().packageManager.canRequestPackageInstalls()) {
+            _state.update { it.copy(appUpdateStatus = AppUpdateStatus.PERMISSION_REQUIRED) }
+            return
+        }
+        if (_state.value.appUpdateStatus == AppUpdateStatus.DOWNLOADING) return
+        _state.update {
+            it.copy(appUpdateStatus = AppUpdateStatus.DOWNLOADING, appUpdateDownloadedBytes = 0L, appUpdateTotalBytes = info.sizeBytes, appUpdateError = null)
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                appUpdater.download(info) { downloaded, total ->
+                    _state.update { current -> current.copy(appUpdateDownloadedBytes = downloaded, appUpdateTotalBytes = total) }
+                }
+            }.onSuccess { apk ->
+                _state.update { it.copy(appUpdateStatus = AppUpdateStatus.INSTALLING) }
+                runCatching { AndroidAppInstaller.install(getApplication(), apk) }.onFailure { error ->
+                    _state.update { it.copy(appUpdateStatus = AppUpdateStatus.ERROR, appUpdateError = error.message ?: "Could not start the Android installer") }
+                }
+            }.onFailure { error ->
+                _state.update { it.copy(appUpdateStatus = AppUpdateStatus.ERROR, appUpdateError = error.message ?: "Update download failed") }
+            }
+        }
+    }
+
+    fun dismissAppUpdateError() {
+        _state.update { it.copy(appUpdateStatus = AppUpdateStatus.AVAILABLE, appUpdateError = null) }
     }
 
     private fun mergeStartupLog(
@@ -1032,24 +1087,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun pingApi() {
-        val url = _state.value.provider.baseUrl.ifBlank { return }
+        val profile = _state.value.provider
+        if (profile.baseUrl.isBlank() || profile.model.isBlank()) return
         if (_state.value.apiPingStatus == ApiPingStatus.PINGING) return
-        _state.update { it.copy(apiPingStatus = ApiPingStatus.PINGING) }
+        _state.update { it.copy(apiPingStatus = ApiPingStatus.PINGING, apiPingMessage = "Sending a minimal test request…") }
         viewModelScope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                runCatching {
-                    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                    conn.requestMethod = "HEAD"
-                    conn.connectTimeout = 5_000
-                    conn.readTimeout = 5_000
-                    conn.instanceFollowRedirects = true
-                    conn.connect()
-                    val code = conn.responseCode
-                    conn.disconnect()
-                    code in 100..599  // any HTTP response = server is alive
-                }.getOrDefault(false)
+            val key = vault.get(profile.kind.name).orEmpty()
+            val result = providerApi.validate(profile.baseUrl, profile.model, key, profile.kind.protocol, emptyList())
+            when (result) {
+                is ConnectionValidation.Success -> _state.update {
+                    it.copy(apiPingStatus = ApiPingStatus.OK, apiPingMessage = "API responded successfully")
+                }
+                is ConnectionValidation.Failure -> _state.update {
+                    it.copy(apiPingStatus = ApiPingStatus.FAILED, apiPingMessage = result.message)
+                }
             }
-            _state.update { it.copy(apiPingStatus = if (ok) ApiPingStatus.OK else ApiPingStatus.FAILED) }
         }
     }
 

@@ -41,6 +41,10 @@ class AppPreferences(private val context: Context) {
         get() = preferences.getInt("test_provider_defaults_version", 0)
         set(value) { preferences.edit().putInt("test_provider_defaults_version", value).apply() }
 
+    var lastAppUpdateCheckMillis: Long
+        get() = preferences.getLong("last_app_update_check_millis", 0L)
+        set(value) { preferences.edit().putLong("last_app_update_check_millis", value).apply() }
+
     /** Development stacks the user picked during onboarding (names of DevStack). */
     var selectedDevStacks: Set<String>
         get() {
