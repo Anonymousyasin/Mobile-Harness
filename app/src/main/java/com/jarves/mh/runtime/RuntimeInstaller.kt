@@ -889,15 +889,15 @@ class RuntimeInstaller(private val context: Context) {
         ensureSettingsAndHooks()
         File(context.filesDir, "runtime-bridge").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
         onProgress(RuntimeInstallProgress("Preparing the Android runtime bridge", 0.42f))
-        val probe = process(proot, rootfs, File(rootfs, "root"), emptyMap(), listOf("/usr/local/bin/claude", "--version"))
-        onProgress(RuntimeInstallProgress("Starting Claude Code $version", 0.68f))
+        val probe = process(proot, rootfs, File(rootfs, "root"), emptyMap(), listOf("/usr/bin/pi", "--version"))
+        onProgress(RuntimeInstallProgress("Starting Pi Agent $version", 0.68f))
         withTimeout(20_000) {
             while (probe.isAlive) delay(50)
         }
         val exit = probe.waitFor()
         val output = (probe as? NativeSpawnProcess)?.outputFile?.readText().orEmpty().trim()
-        check(exit == 0) { output.ifBlank { "Claude Code initialization failed (exit $exit)" } }
-        onProgress(RuntimeInstallProgress("Claude Code is ready", 1f))
+        check(exit == 0) { output.ifBlank { "Pi Agent initialization failed (exit $exit)" } }
+        onProgress(RuntimeInstallProgress("Pi Agent is ready", 1f))
         return installed
     }
 
