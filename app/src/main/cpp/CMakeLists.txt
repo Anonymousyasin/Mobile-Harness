@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(mobile_harness_native C ASM)
 
-if(NOT ANDROID_ABI STREQUAL "arm64-v8a")
+if(NOT (ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "armeabi-v7a"))
     message(FATAL_ERROR "Mobile Harness currently supports only arm64-v8a")
 endif()
 
