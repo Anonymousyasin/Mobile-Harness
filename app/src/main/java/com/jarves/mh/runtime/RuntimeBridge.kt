@@ -73,9 +73,10 @@ object RuntimeLaunchConfigBuilder {
                 }
             }
         }
+        val executable = "/data/user/0/com.termux/files/usr/bin/pi"
         return RuntimeLaunchConfig(
-            executable = "/usr/local/bin/claude",
-            arguments = listOf("-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"),
+            executable = executable,
+            arguments = listOf("--provider", "anthropic", "--mode", "json", "--print", "-p"),
             environment = environment,
         )
     }
