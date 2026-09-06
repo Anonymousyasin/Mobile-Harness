@@ -134,6 +134,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -150,6 +151,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
@@ -1135,6 +1137,13 @@ private fun StartupLoadingScreen(
     themeMode: AppThemeMode = AppThemeMode.DARK,
     onToggleTheme: () -> Unit = {},
 ) {
+    val view = LocalView.current
+    // Runtime download + install can take 10+ minutes; keep the screen on while this
+    // screen is visible. Released automatically when setup finishes or leaves.
+    DisposableEffect(Unit) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
+    }
     val installing = state.startupStage == StartupStage.INSTALLING
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -3131,6 +3140,13 @@ private fun ChatTab(
     onOpenAttachment: (ChatAttachment) -> Unit,
     onRunInTerminal: (String) -> Unit,
 ) {
+    val view = LocalView.current
+    // Keep the screen on while Claude is working in this chat. Released automatically
+    // when the task finishes or the user leaves the chat tab.
+    DisposableEffect(isRunning) {
+        view.keepScreenOn = isRunning
+        onDispose { view.keepScreenOn = false }
+    }
     var prompt by rememberSaveable { mutableStateOf("") }
     val chatScope = rememberCoroutineScope()
     // True while the newest item (message, live panel, or approval card) is on screen.

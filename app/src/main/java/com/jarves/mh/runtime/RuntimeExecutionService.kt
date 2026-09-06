@@ -79,7 +79,7 @@ class RuntimeExecutionService : Service() {
 
     private fun runningNotification(detail: String, includeStop: Boolean): android.app.Notification {
         val builder = NotificationCompat.Builder(this, RUNNING_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Mobile Harness is working")
             .setContentText(detail)
             .setContentIntent(openAppIntent())
@@ -104,7 +104,7 @@ class RuntimeExecutionService : Service() {
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         val notification = NotificationCompat.Builder(this, RESULT_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(detail)
             .setStyle(NotificationCompat.BigTextStyle().bigText(detail))

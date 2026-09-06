@@ -292,7 +292,7 @@ class RuntimeSetupService : Service() {
     private fun setupNotification(state: RuntimeSetupSnapshot): android.app.Notification {
         val latest = state.logs.lastOrNull().orEmpty().take(180)
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Setting up Mobile Harness")
             .setContentText(latest.ifBlank { state.message })
             .setStyle(NotificationCompat.BigTextStyle().bigText(latest.ifBlank { state.message }))
@@ -321,7 +321,7 @@ class RuntimeSetupService : Service() {
         val title = if (success) "Mobile Harness is ready" else "Setup needs attention"
         val detail = if (success) "Your private coding workspace is ready." else state.errorMessage.orEmpty()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(detail)
             .setStyle(NotificationCompat.BigTextStyle().bigText(detail))
