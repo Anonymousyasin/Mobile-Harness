@@ -203,6 +203,8 @@ class DshRuntimeBridge(
         var completed = false
         var sawActivity = false
         var shutdownSent = false
+        var shutdownSentAt = 0L
+        var inputClosed = false
         var failure = ""
 
         fun send(method: String, id: Int, params: JSONObject? = null) {
@@ -214,6 +216,12 @@ class DshRuntimeBridge(
             writer.write(frame.toString())
             writer.newLine()
             writer.flush()
+        }
+
+        fun closeInput() {
+            if (inputClosed) return
+            inputClosed = true
+            runCatching { writer.close() }
         }
 
         send(
@@ -251,30 +259,31 @@ class DshRuntimeBridge(
                             failure = "DeepSeek Harness stopped before processing the prompt"
                         }
                         shutdownSent = true
+                        shutdownSentAt = android.os.SystemClock.elapsedRealtime()
                         send("shutdown", SDK_SHUTDOWN_ID)
                     }
                 }
                 is DshSdkProtocolEvent.Reasoning -> {
                     sawActivity = true
                     emitReasoningSummary(
-                    sessionId = sessionId,
-                    text = protocolEvent.text,
-                    blockId = protocolEvent.blockId,
-                    startsNewBlock = protocolEvent.startsNewBlock,
-                    isFinal = protocolEvent.isFinal,
-                    force = protocolEvent.startsNewBlock || protocolEvent.isFinal,
+                        sessionId = sessionId,
+                        text = protocolEvent.text,
+                        blockId = protocolEvent.blockId,
+                        startsNewBlock = protocolEvent.startsNewBlock,
+                        isFinal = protocolEvent.isFinal,
+                        force = protocolEvent.startsNewBlock || protocolEvent.isFinal,
                     )
                 }
                 is DshSdkProtocolEvent.ToolStarted -> {
                     sawActivity = true
                     eventBus.emit(
-                    RuntimeEvent.ToolStarted(sessionId, protocolEvent.name, protocolEvent.detail),
+                        RuntimeEvent.ToolStarted(sessionId, protocolEvent.name, protocolEvent.detail),
                     )
                 }
                 is DshSdkProtocolEvent.ToolCompleted -> {
                     sawActivity = true
                     eventBus.emit(
-                    RuntimeEvent.ToolCompleted(sessionId, protocolEvent.name, protocolEvent.summary),
+                        RuntimeEvent.ToolCompleted(sessionId, protocolEvent.name, protocolEvent.summary),
                     )
                 }
                 is DshSdkProtocolEvent.AssistantText -> if (protocolEvent.text.isNotEmpty()) {
@@ -283,11 +292,20 @@ class DshRuntimeBridge(
                 }
                 is DshSdkProtocolEvent.Failed -> failure = protocolEvent.message
                 DshSdkProtocolEvent.TurnCompleted -> sawActivity = true
+                DshSdkProtocolEvent.ShutdownAcknowledged -> closeInput()
                 DshSdkProtocolEvent.Ignored -> Unit
             }
         }
 
         while (process.isAlive || nativeProcess.outputFile.length() > outputOffset) {
+            if (
+                process.isAlive &&
+                shutdownSentAt > 0L &&
+                android.os.SystemClock.elapsedRealtime() - shutdownSentAt >= SDK_SHUTDOWN_TIMEOUT_MS
+            ) {
+                closeInput()
+                process.destroy()
+            }
             val available = nativeProcess.outputFile.length() - outputOffset
             if (available <= 0) {
                 delay(50)
@@ -312,7 +330,7 @@ class DshRuntimeBridge(
         pendingOutput.toString().trim().takeIf(String::isNotBlank)?.let {
             handle(parser.parseLine(it))
         }
-        runCatching { writer.close() }
+        closeInput()
         return DshSdkRunResult(completed = completed, failure = failure)
     }
 
@@ -628,6 +646,7 @@ class DshRuntimeBridge(
         private const val SDK_INITIALIZE_ID = 1
         private const val SDK_PROMPT_ID = 2
         private const val SDK_SHUTDOWN_ID = 3
+        private const val SDK_SHUTDOWN_TIMEOUT_MS = 3_000L
     }
 }
 
@@ -725,6 +744,7 @@ internal sealed interface DshSdkProtocolEvent {
     data class AssistantText(val text: String) : DshSdkProtocolEvent
     data class Failed(val message: String) : DshSdkProtocolEvent
     data object TurnCompleted : DshSdkProtocolEvent
+    data object ShutdownAcknowledged : DshSdkProtocolEvent
     data object Ignored : DshSdkProtocolEvent
 }
 
@@ -753,6 +773,7 @@ internal class DshSdkProtocolParser(private val expectedSessionId: String) {
             return when (id) {
                 1 -> DshSdkProtocolEvent.Initialized
                 2 -> DshSdkProtocolEvent.PromptAccepted
+                3 -> DshSdkProtocolEvent.ShutdownAcknowledged
                 else -> DshSdkProtocolEvent.Ignored
             }
         }

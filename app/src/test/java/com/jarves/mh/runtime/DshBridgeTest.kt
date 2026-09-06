@@ -57,6 +57,7 @@ class DshSdkProtocolParserTest {
     @Test
     fun parsesHandshakeAndLifecycle() {
         assertEquals(DshSdkProtocolEvent.Initialized, parser.parseLine("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}"))
+        assertEquals(DshSdkProtocolEvent.ShutdownAcknowledged, parser.parseLine("{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{}}"))
         assertEquals(
             DshSdkProtocolEvent.Status(true),
             parser.parseLine(notification("session.status", JSONObject().put("sessionId", "session-1").put("status", "running"))),
