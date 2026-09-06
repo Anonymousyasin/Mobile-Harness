@@ -153,6 +153,9 @@ android {
 tasks.matching { it.name.startsWith("mergeOffline") && it.name.endsWith("Assets") }
     .configureEach { dependsOn(prepareOfflineRuntimeAssets) }
 
+tasks.matching { it.name.contains("Offline") && it.name.contains("lint", ignoreCase = true) }
+    .configureEach { dependsOn(prepareOfflineRuntimeAssets) }
+
 tasks.register("playReadinessCheck") {
     group = "verification"
     description = "Checks configuration required before uploading a Mobile Harness Play bundle."
