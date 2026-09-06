@@ -74,10 +74,17 @@ add_executable(prootloader
 )
 target_include_directories(prootloader PRIVATE "${PROOT_ROOT}")
 target_compile_options(prootloader PRIVATE -fPIC -ffreestanding)
-target_link_options(prootloader PRIVATE
-    -static -nostdlib
-    "-Wl,--build-id=none,--rosegment,-Ttext=0x2000000000,-z,noexecstack,-u,pokedata_workaround"
-)
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    target_link_options(prootloader PRIVATE
+        -static -nostdlib
+        "-Wl,--build-id=none,--rosegment,-Ttext=0x2000000000,-z,noexecstack,-u,pokedata_workaround"
+    )
+else()
+    target_link_options(prootloader PRIVATE
+        -static -nostdlib
+        "-Wl,--build-id=none,--rosegment,-z,noexecstack,-u,pokedata_workaround"
+    )
+endif()
 set_target_properties(prootloader PROPERTIES OUTPUT_NAME "prootloader-bin" SUFFIX "")
 
 add_custom_command(
