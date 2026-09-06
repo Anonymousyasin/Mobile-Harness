@@ -108,6 +108,7 @@ class ClaudeRuntimeBridge(
             return@withContext sessionId
         }
 
+        var formatGateway: LocalFormatGateway? = null
         runCatching {
             RuntimeTaskController.stopAction = {
                 userStopRequested = true
@@ -129,7 +130,11 @@ class ClaudeRuntimeBridge(
             val workspace = ensureWorkspace(projectId)
             createCheckpoint(projectId, workspace)
             val before = snapshot(workspace)
-            val launch = RuntimeLaunchConfigBuilder.build(provider, authToken = secret)
+            formatGateway = if (provider.kind.protocol in setOf(
+                    com.jarves.mh.model.ProviderProtocol.OPENAI_CHAT,
+                    com.jarves.mh.model.ProviderProtocol.OPENAI_RESPONSES,
+                )) LocalFormatGateway(provider, secret).start() else null
+            val launch = RuntimeLaunchConfigBuilder.build(provider, authToken = secret, localGatewayUrl = formatGateway?.url)
             Log.d("ClaudeBridge", "Provider: ${provider.kind}, Model: ${provider.model}, BaseUrl: ${provider.baseUrl}")
             Log.d("ClaudeBridge", "Launch environment keys: ${launch.environment.keys}")
 
@@ -147,7 +152,7 @@ class ClaudeRuntimeBridge(
                 add("--include-partial-messages")
                 add("--verbose")
                 add("--model")
-                add(provider.model)
+                add(launch.environment["ANTHROPIC_MODEL"] ?: provider.model)
                 add("--max-turns")
                 add("25")
             }
@@ -250,6 +255,7 @@ class ClaudeRuntimeBridge(
                 )
             }
         }
+        formatGateway?.close()
         activeProcess = null
         activeSessionId = null
         RuntimeTaskController.stopAction = null
@@ -611,6 +617,11 @@ class ClaudeRuntimeBridge(
             sb.appendLine("Create and edit project files directly in this directory. Do not create another outer project folder unless the user explicitly asks for one.")
             sb.appendLine("When giving commands to the user, make them runnable from this project root.")
         }
+        sb.appendLine("If this is an Android project, the phone already provides JDK 17, Android SDK 36, ARM64 Build Tools 35.0.0, Gradle 8.14.3, and an offline Maven repository.")
+        sb.appendLine("For newly created Android projects, use AGP 8.11.0, Kotlin 1.9.22, compileSdk 36, and Java 17 so the preinstalled offline toolchain can build immediately.")
+        sb.appendLine("The bundled Maven cache handles the base toolchain; Gradle may download project-specific libraries normally. Set android.useAndroidX=true for AndroidX or Compose projects.")
+        sb.appendLine("PocketDev globally configures Gradle to use the SDK's ARM64 aapt2. Do not use the x86_64 Maven aapt2, investigate its architecture, or add android.aapt2FromMavenOverride to the project.")
+        sb.appendLine("Use the installed `gradle` command for Android builds; do not ask the user to install Android Studio, an SDK, Gradle, ADB, or Termux.")
         sb.appendLine("For local servers, give a clear start command and never use a kill command that searches its own command text with pgrep, because it can terminate the terminal itself.")
         sb.appendLine("</project_workspace>")
         sb.appendLine()

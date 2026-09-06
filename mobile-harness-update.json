@@ -1,0 +1,17 @@
+{
+  "versionCode": 4,
+  "versionName": "1.0.3",
+  "notes": "Adds direct on-device Android builds and installation, staged offline/online toolchain bundles, OpenRouter, DeepSeek and Kimi provider support, improved model discovery, in-app updates, and more reliable background runtime notifications.",
+  "artifacts": {
+    "online": {
+      "url": "https://github.com/techjarves/Mobile-Harness/releases/download/v1.0.3/mobile-harness-online-v1.0.3.apk",
+      "sha256": "36715d9710bfb384c66200e0f3e84f9ecff0d13400418dec40008723b6e29987",
+      "sizeBytes": 44623505
+    },
+    "offline": {
+      "url": "https://github.com/techjarves/Mobile-Harness/releases/download/v1.0.3/mobile-harness-offline-v1.0.3.apk",
+      "sha256": "dbb5fb10a3564206856b3f525a641f62f12c0831e21817099072f90f38dd1647",
+      "sizeBytes": 818539975
+    }
+  }
+}

@@ -15,6 +15,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebChromeClient
 import android.widget.Toast
+import com.jarves.mh.BuildConfig
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -133,6 +134,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -149,6 +151,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
@@ -303,6 +306,7 @@ fun PocketDevApp(viewModel: MainViewModel = viewModel()) {
             onAddAttachments = viewModel::addChatAttachments,
             onRemoveAttachment = viewModel::removePendingAttachment,
             onOpenAttachment = viewModel::openChatAttachment,
+            onBuildAndRunAndroid = viewModel::buildAndRunAndroidApp,
         )
         else -> RootScreenHost(state, viewModel, projectsListState)
     }
@@ -412,7 +416,7 @@ private fun BackgroundTaskSetupScreen(
             Text("Prepare for reliable setup", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Initial setup usually takes 10–12 minutes. You may leave Mobile Harness in the background while it works.",
+                "Setup time depends on the toolchains you choose next. You may leave Mobile Harness in the background while it works.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
@@ -765,7 +769,7 @@ private fun RuntimeSetupPromptScreen(
                         SpecRow(
                             icon = Icons.Default.Storage,
                             label = "Download",
-                            value = "~500 MB · Wi-Fi recommended",
+                            value = "149–774 MB · depends on selected tools",
                             statusOk = true,
                         )
                     }
@@ -891,7 +895,12 @@ private fun RuntimeSetupPromptScreen(
                         }
                         Spacer(Modifier.width(11.dp))
                         Column(Modifier.weight(1f)) {
-                            Text("Core tools included", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                            Text(
+                                if (BuildConfig.OFFLINE_RUNTIME_BUNDLES) "Core tools included" else "Core runtime · 149 MB download",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.5.sp,
+                            )
                             Text("Claude Code  ·  Node.js  ·  npm  ·  Git", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                         }
                         Icon(Icons.Default.Check, "Included", tint = PocketGreen, modifier = Modifier.size(20.dp))
@@ -912,7 +921,8 @@ private fun RuntimeSetupPromptScreen(
                         DevStack.entries.forEachIndexed { index, stack ->
                             DevStackChoiceRow(
                                 stack = stack,
-                                selected = stack in selectedStacks,
+                                selected = stack == DevStack.WEB || stack in selectedStacks,
+                                locked = stack == DevStack.WEB,
                                 onClick = { onToggleStack(stack) },
                             )
                             if (index != DevStack.entries.lastIndex) {
@@ -927,8 +937,7 @@ private fun RuntimeSetupPromptScreen(
                     Icon(Icons.Default.Storage, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(15.dp))
                     Spacer(Modifier.width(7.dp))
                     Text(
-                        if (selectedStacks.isEmpty()) "Core runtime only · smallest download"
-                        else "${selectedStacks.size} optional toolchain${if (selectedStacks.size == 1) "" else "s"} selected",
+                        toolchainDownloadSummary(selectedStacks),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                     )
@@ -977,15 +986,65 @@ private fun RuntimeSetupPromptScreen(
     }
 }
 
+private const val CORE_RUNTIME_DOWNLOAD_MB = 149
+private const val PYTHON_RUNTIME_DOWNLOAD_MB = 55
+private const val ANDROID_RUNTIME_DOWNLOAD_MB = 570
+
+private fun setupTimeEstimate(selected: Set<DevStack>): String {
+    var minimumMinutes = 3
+    var maximumMinutes = 5
+    if (DevStack.PYTHON in selected) {
+        minimumMinutes += 1
+        maximumMinutes += 2
+    }
+    if (DevStack.ANDROID in selected) {
+        minimumMinutes += 7
+        maximumMinutes += 10
+    }
+    if (DevStack.CPP in selected) {
+        minimumMinutes += 3
+        maximumMinutes += 5
+    }
+    if (DevStack.PHP in selected) {
+        minimumMinutes += 2
+        maximumMinutes += 4
+    }
+    return "$minimumMinutes–$maximumMinutes minutes"
+}
+
+private fun stackDownloadLabel(stack: DevStack): String = when {
+    stack == DevStack.WEB -> " · included"
+    BuildConfig.OFFLINE_RUNTIME_BUNDLES && stack in setOf(DevStack.PYTHON, DevStack.ANDROID) -> " · included"
+    !BuildConfig.OFFLINE_RUNTIME_BUNDLES && stack == DevStack.PYTHON -> " · 55 MB"
+    !BuildConfig.OFFLINE_RUNTIME_BUNDLES && stack == DevStack.ANDROID -> " · 570 MB"
+    else -> ""
+}
+
+private fun toolchainDownloadSummary(selected: Set<DevStack>): String {
+    if (BuildConfig.OFFLINE_RUNTIME_BUNDLES) return "All selected bundles are included in this offline app"
+    val total = CORE_RUNTIME_DOWNLOAD_MB +
+        (if (DevStack.PYTHON in selected) PYTHON_RUNTIME_DOWNLOAD_MB else 0) +
+        (if (DevStack.ANDROID in selected) ANDROID_RUNTIME_DOWNLOAD_MB else 0)
+    val laterPackages = selected.intersect(setOf(DevStack.CPP, DevStack.PHP))
+    return buildString {
+        append("Download: ")
+        append(total)
+        append(" MB")
+        if (laterPackages.isNotEmpty()) append(" · C/PHP packages download later")
+        if (total >= 500) append(" · Wi-Fi recommended")
+    }
+}
+
 @Composable
 private fun DevStackChoiceRow(
     stack: DevStack,
     selected: Boolean,
+    locked: Boolean,
     onClick: () -> Unit,
 ) {
     val visuals = getDevStackVisuals(stack)
     val conciseDescription = when (stack) {
-        DevStack.WEB -> "Websites and JavaScript apps"
+        DevStack.WEB -> "Included with the Core runtime"
         DevStack.PYTHON -> "Scripts, automation and backends"
         DevStack.ANDROID -> "Java and Kotlin build tools"
         DevStack.CPP -> "Native apps and command-line tools"
@@ -996,7 +1055,7 @@ private fun DevStackChoiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent)
-            .clickable(onClick = onClick)
+            .clickable(enabled = !locked, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1010,7 +1069,12 @@ private fun DevStackChoiceRow(
         }
         Spacer(Modifier.width(11.dp))
         Column(Modifier.weight(1f)) {
-            Text(stack.label, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            Text(
+                stack.label + stackDownloadLabel(stack),
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+            )
             Spacer(Modifier.height(1.dp))
             Text(conciseDescription, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -1073,6 +1137,13 @@ private fun StartupLoadingScreen(
     themeMode: AppThemeMode = AppThemeMode.DARK,
     onToggleTheme: () -> Unit = {},
 ) {
+    val view = LocalView.current
+    // Runtime download + install can take 10+ minutes; keep the screen on while this
+    // screen is visible. Released automatically when setup finishes or leaves.
+    DisposableEffect(Unit) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
+    }
     val installing = state.startupStage == StartupStage.INSTALLING
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -1168,7 +1239,7 @@ private fun StartupLoadingScreen(
                     Spacer(Modifier.height(10.dp))
                     Row(Modifier.fillMaxWidth().height(18.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (installing) "Usually 10–12 minutes" else "Starting local tools",
+                            if (installing) "Estimated ${setupTimeEstimate(state.selectedDevStacks)}" else "Starting local tools",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 11.5.sp,
                         )
@@ -1438,6 +1509,7 @@ private fun RootScreenHost(
                     onSettings = { screen = RootScreen.SETTINGS },
                     onPing = viewModel::pingApi,
                     onToggleTheme = viewModel::toggleTheme,
+                    onInstallUpdate = viewModel::installAppUpdate,
                 )
                 RootScreen.TERMINAL -> TerminalScreen(
                     lines = terminalLines,
@@ -1463,6 +1535,9 @@ private fun RootScreenHost(
                     onClearTerminal = viewModel::clearTerminal,
                     getSavedApiKey = viewModel::getSavedApiKey,
                     onInstallDevStack = viewModel::installDevStack,
+                    initialDebugUpdateManifestUrl = viewModel.debugUpdateManifestUrl(),
+                    onSetDebugUpdateManifestUrl = viewModel::setDebugUpdateManifestUrl,
+                    onClearDebugUpdateManifestUrl = viewModel::clearDebugUpdateManifestUrl,
                 )
             }
         }
@@ -1536,12 +1611,8 @@ private fun ProviderSetupScreen(
                     onSelected = {
                         if (selected != it) {
                             selected = it
-                            baseUrl = if (it == ProviderKind.CUSTOM || it == ProviderKind.ANTHROPIC) {
-                                "https://api.deepseek.com/anthropic"
-                            } else {
-                                it.defaultBaseUrl
-                            }
-                            model = if (it == ProviderKind.CUSTOM) "deepseek-chat" else it.defaultModel
+                            baseUrl = it.defaultBaseUrl
+                            model = it.defaultModel
                             apiKey = ""
                         }
                     },
@@ -1720,15 +1791,15 @@ private fun ProviderChoiceRow(
         ProviderKind.CLAUDE -> Color(0xFFD97757)
         ProviderKind.ANTHROPIC -> Color(0xFFE7A26D)
         ProviderKind.LLM_ROUTER -> Color(0xFF5B8DEF)
-        ProviderKind.OPENAI -> Color(0xFF19A77C)
+        ProviderKind.DEEPSEEK -> Color(0xFF4D6BFE)
         ProviderKind.KIMI -> Color(0xFF8B7CF6)
         ProviderKind.CUSTOM -> PocketOrange
     }
     val mark = when (provider) {
         ProviderKind.CLAUDE -> "C"
         ProviderKind.ANTHROPIC -> "A"
-        ProviderKind.LLM_ROUTER -> "LR"
-        ProviderKind.OPENAI -> "O"
+        ProviderKind.LLM_ROUTER -> "OR"
+        ProviderKind.DEEPSEEK -> "DS"
         ProviderKind.KIMI -> "K"
         ProviderKind.CUSTOM -> "<>"
     }
@@ -1912,7 +1983,10 @@ private fun ProviderCredentialsStep(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column(Modifier.weight(1f)) {
-                                    Text(option.displayName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(option.displayName, modifier = Modifier.weight(1f, fill = false), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        if (option.isFree) Text("  FREE", color = Color(0xFF58C99C), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
                                     if (option.displayName != option.id) {
                                         Text(option.id, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
@@ -2073,10 +2147,19 @@ private fun ProjectsScreen(
     onSettings: () -> Unit,
     onPing: () -> Unit,
     onToggleTheme: () -> Unit,
+    onInstallUpdate: () -> Unit,
 ) {
     var showCreate by rememberSaveable { mutableStateOf(false) }
+    var showUpdateDialog by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
     val projects = state.projects
+    val context = LocalContext.current
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        onInstallUpdate()
+    }
+    LaunchedEffect(state.appUpdate?.versionCode) {
+        if (state.appUpdate != null) showUpdateDialog = true
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -2142,6 +2225,28 @@ private fun ProjectsScreen(
                             maxLines = 1,
                             softWrap = false,
                         )
+                    }
+                }
+            }
+            state.appUpdate?.let { update ->
+                item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().clickable { showUpdateDialog = true },
+                        shape = RoundedCornerShape(20.dp),
+                        color = PocketOrange.copy(alpha = 0.11f),
+                        border = BorderStroke(1.dp, PocketOrange.copy(alpha = 0.45f)),
+                    ) {
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Surface(shape = CircleShape, color = PocketOrange.copy(alpha = 0.18f), modifier = Modifier.size(46.dp)) {
+                                Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Download, null, tint = PocketOrange) }
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Mobile Harness ${update.versionName}", fontWeight = FontWeight.Bold)
+                                Text("A new update is ready", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Text("Update", color = PocketOrange, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
                     }
                 }
             }
@@ -2224,6 +2329,63 @@ private fun ProjectsScreen(
         confirmButton = { TextButton(onClick = { onCreate(name); showCreate = false; name = "" }, enabled = name.isNotBlank()) { Text("Create") } },
         dismissButton = { TextButton(onClick = { showCreate = false }) { Text("Cancel") } },
     )
+    val update = state.appUpdate
+    if (showUpdateDialog && update != null) {
+        val canInstall = Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
+        val downloading = state.appUpdateStatus == AppUpdateStatus.DOWNLOADING
+        val installing = state.appUpdateStatus == AppUpdateStatus.INSTALLING
+        val total = state.appUpdateTotalBytes
+        val downloaded = state.appUpdateDownloadedBytes
+        val progress = if (total > 0) (downloaded.toFloat() / total).coerceIn(0f, 1f) else 0f
+        AlertDialog(
+            onDismissRequest = { if (!installing) showUpdateDialog = false },
+            icon = { Icon(Icons.Default.Download, null, tint = PocketOrange, modifier = Modifier.size(34.dp)) },
+            title = { Text("Update to ${update.versionName}", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(update.notes.ifBlank { "Get the latest improvements and fixes for Mobile Harness." })
+                    if (update.sizeBytes > 0) Text("Download size: ${formatMegabytes(update.sizeBytes)}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                    if (!canInstall) {
+                        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f)) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+                                Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Allow ‘Install unknown apps’ for Mobile Harness. Without this permission, Android will not install the update.", fontSize = 13.sp)
+                            }
+                        }
+                    }
+                    if (downloading) {
+                        if (total > 0) LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                        else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(
+                            if (total > 0) "Downloading ${formatMegabytes(downloaded)} / ${formatMegabytes(total)} · ${(progress * 100).toInt()}%" else "Downloading ${formatMegabytes(downloaded)}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (installing) Text("Download verified. Opening Android installer…", color = PocketGreen, fontSize = 13.sp)
+                    state.appUpdateError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !downloading && !installing,
+                    onClick = {
+                        if (!canInstall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            permissionLauncher.launch(
+                                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")),
+                            )
+                        } else {
+                            onInstallUpdate()
+                        }
+                    },
+                ) {
+                    Text(when { !canInstall -> "Grant permission"; downloading -> "Downloading…"; installing -> "Installing…"; else -> "Download and install" })
+                }
+            },
+            dismissButton = { if (!installing) TextButton(onClick = { showUpdateDialog = false }) { Text("Later") } },
+        )
+    }
 }
 
 @Composable
@@ -2382,9 +2544,11 @@ private fun WorkspaceScreen(
     onAddAttachments: (List<Uri>) -> Unit,
     onRemoveAttachment: (String) -> Unit,
     onOpenAttachment: (ChatAttachment) -> Unit,
+    onBuildAndRunAndroid: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
+    val isAndroidProject = state.androidProjectDetected
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val exportProjectLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip"),
@@ -2393,6 +2557,16 @@ private fun WorkspaceScreen(
     val attachmentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
         onResult = onAddAttachments,
+    )
+    val unknownAppsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()) {
+                onBuildAndRunAndroid()
+            } else {
+                Toast.makeText(context, "Allow app installs to run Android projects", Toast.LENGTH_LONG).show()
+            }
+        },
     )
     val chatListState = rememberLazyListState()
     var userScrolledUp by rememberSaveable { mutableStateOf(false) }
@@ -2523,6 +2697,27 @@ private fun WorkspaceScreen(
                 },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Projects") } },
                 actions = {
+                    if (isAndroidProject) {
+                        IconButton(
+                            onClick = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                                    !context.packageManager.canRequestPackageInstalls()) {
+                                    unknownAppsLauncher.launch(
+                                        Intent(
+                                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                            Uri.parse("package:${context.packageName}"),
+                                        ),
+                                    )
+                                } else {
+                                    onBuildAndRunAndroid()
+                                }
+                            },
+                            enabled = !state.androidBuildRunning && !state.isRunning && !state.projectTerminalRunning,
+                        ) {
+                            if (state.androidBuildRunning) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Default.PlayArrow, "Build and run Android app")
+                        }
+                    }
                     IconButton(onClick = { showChats = true }) { Icon(Icons.Default.History, "Project chats") }
                     if (state.isRunning) CircularProgressIndicator(Modifier.padding(12.dp).size(20.dp), strokeWidth = 2.dp)
                 },
@@ -2945,6 +3140,13 @@ private fun ChatTab(
     onOpenAttachment: (ChatAttachment) -> Unit,
     onRunInTerminal: (String) -> Unit,
 ) {
+    val view = LocalView.current
+    // Keep the screen on while Claude is working in this chat. Released automatically
+    // when the task finishes or the user leaves the chat tab.
+    DisposableEffect(isRunning) {
+        view.keepScreenOn = isRunning
+        onDispose { view.keepScreenOn = false }
+    }
     var prompt by rememberSaveable { mutableStateOf("") }
     val chatScope = rememberCoroutineScope()
     // True while the newest item (message, live panel, or approval card) is on screen.
@@ -3362,7 +3564,7 @@ private fun ActivitySummaryRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            if (item?.isCommand == true) Icons.Default.Terminal else Icons.Default.AutoAwesome,
+            activityIcon(item),
             null,
             Modifier.size(16.dp),
             tint = muted,
@@ -3380,6 +3582,18 @@ private fun ActivitySummaryRow(
             tint = muted,
         )
     }
+}
+
+private fun activityIcon(item: ActivityItem?): ImageVector = when {
+    item == null -> Icons.Default.AutoAwesome
+    item.isCommand || item.title.equals("Bash", ignoreCase = true) -> Icons.Default.Terminal
+    item.title.equals("Write", ignoreCase = true) ||
+        item.title.equals("Edit", ignoreCase = true) ||
+        item.title.equals("NotebookEdit", ignoreCase = true) -> Icons.Default.Edit
+    item.title.equals("Read", ignoreCase = true) -> Icons.Default.Description
+    item.title.equals("Glob", ignoreCase = true) ||
+        item.title.equals("Grep", ignoreCase = true) -> Icons.Default.Search
+    else -> Icons.Default.AutoAwesome
 }
 
 @Composable

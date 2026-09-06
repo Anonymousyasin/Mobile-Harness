@@ -4,7 +4,6 @@ import com.jarves.mh.model.ProviderKind
 import com.jarves.mh.model.ProviderProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class RuntimeLaunchConfigBuilderTest {
@@ -21,21 +20,11 @@ class RuntimeLaunchConfigBuilderTest {
     }
 
     @Test
-    fun openAiRequiresFormatGateway() {
-        assertThrows(IllegalArgumentException::class.java) {
-            RuntimeLaunchConfigBuilder.build(ProviderProfile(ProviderKind.OPENAI))
-        }
-    }
+    fun kimiUsesItsAnthropicCompatibleEndpointDirectly() {
+        val config = RuntimeLaunchConfigBuilder.build(ProviderProfile(ProviderKind.KIMI))
 
-    @Test
-    fun openAiUsesLocalGatewayWithoutExposingProviderUrlToClaude() {
-        val config = RuntimeLaunchConfigBuilder.build(
-            ProviderProfile(ProviderKind.OPENAI, model = "gpt-test"),
-            localGatewayUrl = "http://127.0.0.1:8765/",
-        )
-
-        assertEquals("http://127.0.0.1:8765", config.environment["ANTHROPIC_BASE_URL"])
-        assertEquals("gpt-test", config.environment["ANTHROPIC_MODEL"])
+        assertEquals("https://api.moonshot.ai/anthropic", config.environment["ANTHROPIC_BASE_URL"])
+        assertEquals("kimi-k2.6", config.environment["ANTHROPIC_MODEL"])
     }
 
     @Test
@@ -57,13 +46,13 @@ class RuntimeLaunchConfigBuilderTest {
     @Test
     fun openRouterMatchesVerifiedClaudeCodeEnvironment() {
         val config = RuntimeLaunchConfigBuilder.build(
-            ProviderProfile(ProviderKind.CUSTOM, "https://openrouter.ai/api/", "stealth/ox-alpha", true),
+            ProviderProfile(ProviderKind.LLM_ROUTER, "https://openrouter.ai/api/", "stealth/ox-alpha", true),
             authToken = "temporary-openrouter-secret",
         )
 
         assertEquals("https://openrouter.ai/api", config.environment["ANTHROPIC_BASE_URL"])
         assertEquals("temporary-openrouter-secret", config.environment["ANTHROPIC_AUTH_TOKEN"])
         assertEquals("temporary-openrouter-secret", config.environment["OPENROUTER_API_KEY"])
-        assertEquals("temporary-openrouter-secret", config.environment["ANTHROPIC_API_KEY"])
+        assertEquals("", config.environment["ANTHROPIC_API_KEY"])
     }
 }

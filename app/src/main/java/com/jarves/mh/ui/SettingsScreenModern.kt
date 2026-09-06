@@ -94,7 +94,7 @@ import com.jarves.mh.ui.theme.AppThemeMode
 import com.jarves.mh.ui.theme.PocketOrange
 import kotlinx.coroutines.launch
 
-private enum class SettingsSection { CONNECTION, APPEARANCE, TOOLS, RUNTIME }
+private enum class SettingsSection { CONNECTION, APPEARANCE, TOOLS, RUNTIME, UPDATE_CHANNEL }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,6 +108,9 @@ fun SettingsScreen(
     onClearTerminal: () -> Unit,
     getSavedApiKey: (ProviderKind) -> String,
     onInstallDevStack: (DevStack) -> Unit = {},
+    initialDebugUpdateManifestUrl: String = "",
+    onSetDebugUpdateManifestUrl: (String) -> Unit = {},
+    onClearDebugUpdateManifestUrl: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -203,7 +206,10 @@ fun SettingsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Column(Modifier.weight(1f)) {
-                                    Text(option.displayName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(option.displayName, modifier = Modifier.weight(1f, fill = false), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        if (option.isFree) Text("  FREE", color = Color(0xFF58C99C), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
                                     if (option.displayName != option.id) {
                                         Text(option.id, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
@@ -285,8 +291,8 @@ fun SettingsScreen(
                         onPing = onPing,
                         onProvider = { kind ->
                             selectedKind = kind
-                            baseUrl = if (kind == ProviderKind.CUSTOM || kind == ProviderKind.ANTHROPIC) "https://api.deepseek.com/anthropic" else kind.defaultBaseUrl
-                            model = if (kind == ProviderKind.CUSTOM) "deepseek-chat" else kind.defaultModel
+                            baseUrl = kind.defaultBaseUrl
+                            model = kind.defaultModel
                             apiKey = getSavedApiKey(kind)
                             models = emptyList()
                             status = null
@@ -412,6 +418,16 @@ fun SettingsScreen(
                             ) { Text("Open Developer options") }
                         }
                     }
+                }
+            }
+
+            if (BuildConfig.DEBUG) {
+                item {
+                    DebugUpdateChannelSection(
+                        initialUrl = initialDebugUpdateManifestUrl,
+                        onSave = onSetDebugUpdateManifestUrl,
+                        onClear = onClearDebugUpdateManifestUrl,
+                    )
                 }
             }
 
@@ -551,8 +567,13 @@ private fun ConnectionSettings(
             Column(Modifier.weight(1f)) {
                 Text("Active connection", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(state.provider.model.ifBlank { "Not configured" }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                state.apiPingMessage?.let {
+                    Text(it, fontSize = 11.sp, color = if (state.apiPingStatus == ApiPingStatus.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
             }
-            OutlinedButton(onClick = onPing, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) { Text("Test") }
+            OutlinedButton(onClick = onPing, enabled = state.apiPingStatus != ApiPingStatus.PINGING, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+                Text(if (state.apiPingStatus == ApiPingStatus.PINGING) "Testing…" else "Test")
+            }
         }
     }
 
@@ -642,5 +663,67 @@ private fun RuntimeInfoRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         Text(value, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun DebugUpdateChannelSection(
+    initialUrl: String,
+    onSave: (String) -> Unit,
+    onClear: () -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    var url by rememberSaveable(initialUrl) { mutableStateOf(initialUrl) }
+    val isOverridden = initialUrl.isNotBlank()
+    SettingsAccordion(
+        title = "Update channel",
+        subtitle = if (isOverridden) "Overridden · debug only" else "Default GitHub release",
+        icon = Icons.Default.Tune,
+        expanded = expanded,
+        onClick = { expanded = !expanded },
+    ) {
+        Text(
+            "Debug builds only. Paste the temporary manifest URL from Cloudflare Tunnel, ngrok, or any HTTPS server hosting mobile-harness-update.json and a newer APK.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it },
+            label = { Text("Manifest URL") },
+            placeholder = { Text("https://your-tunnel.example/mobile-harness-update.json") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = { onSave(url) },
+                enabled = url.startsWith("https://"),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (isOverridden) "Replace" else "Use & check")
+            }
+            OutlinedButton(
+                onClick = onClear,
+                enabled = isOverridden,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Reset")
+            }
+        }
+        if (isOverridden) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Current: $initialUrl",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

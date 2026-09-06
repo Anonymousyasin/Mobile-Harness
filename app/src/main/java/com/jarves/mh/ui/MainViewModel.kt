@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.os.SystemClock
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.ContextCompat
@@ -38,6 +39,9 @@ import com.jarves.mh.runtime.RuntimeSetupController
 import com.jarves.mh.runtime.RuntimeSetupService
 import com.jarves.mh.runtime.RuntimeSetupSnapshot
 import com.jarves.mh.runtime.RuntimeSetupStatus
+import com.jarves.mh.runtime.AndroidAppInstaller
+import com.jarves.mh.update.AppUpdateInfo
+import com.jarves.mh.update.AppUpdater
 import java.io.File
 import java.io.RandomAccessFile
 import java.net.UnknownHostException
@@ -59,6 +63,7 @@ import org.json.JSONObject
 enum class StartupStage { CHECKING, SETUP_REQUIRED, INSTALLING, MODEL_SETUP, INITIALIZING, READY, ERROR }
 
 enum class ApiPingStatus { IDLE, PINGING, OK, FAILED }
+enum class AppUpdateStatus { AVAILABLE, PERMISSION_REQUIRED, DOWNLOADING, INSTALLING, ERROR }
 
 data class TerminalOutputLine(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -98,11 +103,13 @@ data class AppUiState(
     val provider: ProviderProfile = ProviderProfile(ProviderKind.ANTHROPIC),
     val themeMode: com.jarves.mh.ui.theme.AppThemeMode = com.jarves.mh.ui.theme.AppThemeMode.DARK,
     val apiPingStatus: ApiPingStatus = ApiPingStatus.IDLE,
+    val apiPingMessage: String? = null,
     val projects: List<Project> = emptyList(),
     val activeProject: Project? = null,
     val projectChats: List<ProjectChat> = emptyList(),
     val activeChatId: String? = null,
     val workspaceFiles: List<WorkspaceEntry> = emptyList(),
+    val androidProjectDetected: Boolean = false,
     val filesLoading: Boolean = false,
     val openedFilePath: String? = null,
     val openedFileContent: String? = null,
@@ -140,6 +147,13 @@ data class AppUiState(
     val devStackMessage: String? = null,
     val devStackProgress: Float = 0f,
     val devStackBytes: Pair<Long, Long>? = null,
+    val androidBuildRunning: Boolean = false,
+    val androidBuildMessage: String? = null,
+    val appUpdate: AppUpdateInfo? = null,
+    val appUpdateStatus: AppUpdateStatus? = null,
+    val appUpdateDownloadedBytes: Long = 0L,
+    val appUpdateTotalBytes: Long = -1L,
+    val appUpdateError: String? = null,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -148,6 +162,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val runtime = ClaudeRuntimeBridge(application) { profile -> vault.get(profile.kind.name) }
     private val installer = RuntimeInstaller(application)
     private val providerApi = ProviderApiClient()
+    private fun appUpdater(): AppUpdater = AppUpdater(
+        getApplication(),
+        if (BuildConfig.DEBUG) preferences.debugUpdateManifestUrl else "",
+    )
     @Volatile private var projectTerminalProcess: Process? = null
     @Volatile private var terminalProcess: Process? = null
     @Volatile private var projectTerminalProjectId: String? = null
@@ -163,7 +181,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             projects = preferences.loadProjects(),
             selectedDevStacks = preferences.selectedDevStacks.mapNotNull { name ->
                 runCatching { DevStack.valueOf(name) }.getOrNull()
-            }.toSet(),
+            }.toSet() + DevStack.WEB,
         ),
     )
 
@@ -654,6 +672,75 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return selected.apply { mkdirs() }
     }
 
+    fun buildAndRunAndroidApp() {
+        val project = _state.value.activeProject ?: return
+        if (_state.value.androidBuildRunning) return
+        if (_state.value.isRunning) {
+            _state.update { it.copy(toastMessage = "Wait for Claude to finish creating the project before building.") }
+            return
+        }
+        if (_state.value.projectTerminalRunning) {
+            _state.update { it.copy(toastMessage = "Wait for the project terminal command to finish before building.") }
+            return
+        }
+        _state.update { it.copy(androidBuildRunning = true, androidBuildMessage = "Building debug APK…", toastMessage = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val installed = installer.installedRuntime()
+                val workspace = findAndroidGradleProjectRoot(projectWorkspaceRoot(project))
+                    ?: error("No Android Gradle project found yet. Ask Claude to create it, then wait for the task to finish.")
+                val process = installer.process(
+                    installed.proot, installed.rootfs, workspace, emptyMap(),
+                    listOf(
+                        "/usr/bin/bash", "-lc",
+                        "gradle --init-script /root/.gradle/init.d/pocketdev-android.gradle " +
+                            "-Pandroid.aapt2FromMavenOverride=/root/android-sdk/build-tools/35.0.0/aapt2 " +
+                            "--no-daemon assembleDebug --console=plain",
+                    ),
+                    projectGuestRoot(project),
+                )
+                val exitCode = process.waitFor()
+                val buildOutput = (process as? NativeSpawnProcess)?.outputFile?.readText().orEmpty()
+                check(exitCode == 0) {
+                    buildOutput.trim().takeLast(2_000).ifBlank { "Gradle build failed (exit code $exitCode)" }
+                }
+                val apk = workspace.walkTopDown()
+                    .filter { it.isFile && it.extension.equals("apk", ignoreCase = true) && it.path.contains("/outputs/apk/debug/") }
+                    .maxByOrNull(File::lastModified)
+                    ?: error("Gradle finished but no debug APK was found")
+                AndroidAppInstaller.install(getApplication(), apk)
+            }.onSuccess {
+                withContext(Dispatchers.Main) {
+                    _state.update {
+                        it.copy(
+                            androidBuildRunning = false,
+                            androidBuildMessage = "APK sent to Android installer",
+                            toastMessage = "APK built. Complete Android's install prompt.",
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) {
+                    _state.update { it.copy(androidBuildRunning = false, androidBuildMessage = null, toastMessage = error.message ?: "Could not build APK") }
+                }
+            }
+        }
+    }
+
+    private fun findAndroidGradleProjectRoot(workspace: File): File? {
+        val settingsNames = setOf("settings.gradle", "settings.gradle.kts", "settings.gradle.dcl")
+        return workspace.walkTopDown()
+            .maxDepth(4)
+            .filter { it.isFile && it.name in settingsNames }
+            .map(File::getParentFile)
+            .sortedBy { it.absolutePath.length }
+            .firstOrNull { root ->
+                root.walkTopDown()
+                    .maxDepth(4)
+                    .any { it.isFile && it.invariantSeparatorsPath.endsWith("src/main/AndroidManifest.xml") }
+            }
+    }
+
 
     fun toggleTheme() {
         val next = if (_state.value.themeMode == com.jarves.mh.ui.theme.AppThemeMode.DARK) {
@@ -830,9 +917,72 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (remaining > 0) delay(remaining)
             _state.update { it.copy(startupStage = StartupStage.READY, startupProgress = 1f) }
             pingApi()
+            checkForAppUpdate()
         } else {
             showStartupError(result.exceptionOrNull() ?: IllegalStateException("Claude Code initialization failed"))
         }
+    }
+
+    fun checkForAppUpdate(force: Boolean = false) {
+        if (!force && System.currentTimeMillis() - preferences.lastAppUpdateCheckMillis < 24L * 60L * 60L * 1000L) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val update = runCatching { appUpdater().check() }.getOrNull()
+            preferences.lastAppUpdateCheckMillis = System.currentTimeMillis()
+            if (update != null) {
+                _state.update {
+                    it.copy(appUpdate = update, appUpdateStatus = AppUpdateStatus.AVAILABLE, appUpdateError = null)
+                }
+            }
+        }
+    }
+
+    /** Debug builds only: persist a manifest URL override and re-check immediately. */
+    fun setDebugUpdateManifestUrl(url: String) {
+        if (!BuildConfig.DEBUG) return
+        preferences.debugUpdateManifestUrl = url.trim()
+        preferences.lastAppUpdateCheckMillis = 0L
+        checkForAppUpdate(force = true)
+    }
+
+    /** Debug builds only: clear the manifest URL override and re-check the default channel. */
+    fun clearDebugUpdateManifestUrl() {
+        if (!BuildConfig.DEBUG) return
+        preferences.debugUpdateManifestUrl = ""
+        preferences.lastAppUpdateCheckMillis = 0L
+        checkForAppUpdate(force = true)
+    }
+
+    /** Debug builds only: the currently-active manifest URL override (empty = default). */
+    fun debugUpdateManifestUrl(): String = if (BuildConfig.DEBUG) preferences.debugUpdateManifestUrl else ""
+
+    fun installAppUpdate() {
+        val info = _state.value.appUpdate ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getApplication<Application>().packageManager.canRequestPackageInstalls()) {
+            _state.update { it.copy(appUpdateStatus = AppUpdateStatus.PERMISSION_REQUIRED) }
+            return
+        }
+        if (_state.value.appUpdateStatus == AppUpdateStatus.DOWNLOADING) return
+        _state.update {
+            it.copy(appUpdateStatus = AppUpdateStatus.DOWNLOADING, appUpdateDownloadedBytes = 0L, appUpdateTotalBytes = info.sizeBytes, appUpdateError = null)
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                appUpdater().download(info) { downloaded, total ->
+                    _state.update { current -> current.copy(appUpdateDownloadedBytes = downloaded, appUpdateTotalBytes = total) }
+                }
+            }.onSuccess { apk ->
+                _state.update { it.copy(appUpdateStatus = AppUpdateStatus.INSTALLING) }
+                runCatching { AndroidAppInstaller.install(getApplication(), apk) }.onFailure { error ->
+                    _state.update { it.copy(appUpdateStatus = AppUpdateStatus.ERROR, appUpdateError = error.message ?: "Could not start the Android installer") }
+                }
+            }.onFailure { error ->
+                _state.update { it.copy(appUpdateStatus = AppUpdateStatus.ERROR, appUpdateError = error.message ?: "Update download failed") }
+            }
+        }
+    }
+
+    fun dismissAppUpdateError() {
+        _state.update { it.copy(appUpdateStatus = AppUpdateStatus.AVAILABLE, appUpdateError = null) }
     }
 
     private fun mergeStartupLog(
@@ -894,6 +1044,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Called from the first-launch tool picker; persists the choice for setup and Settings. */
     fun toggleDevStack(stack: DevStack) {
+        if (stack == DevStack.WEB) return
         val updated = _state.value.selectedDevStacks.toMutableSet().apply {
             if (!add(stack)) remove(stack)
         }
@@ -958,24 +1109,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun pingApi() {
-        val url = _state.value.provider.baseUrl.ifBlank { return }
+        val profile = _state.value.provider
+        if (profile.baseUrl.isBlank() || profile.model.isBlank()) return
         if (_state.value.apiPingStatus == ApiPingStatus.PINGING) return
-        _state.update { it.copy(apiPingStatus = ApiPingStatus.PINGING) }
+        _state.update { it.copy(apiPingStatus = ApiPingStatus.PINGING, apiPingMessage = "Sending a minimal test request…") }
         viewModelScope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                runCatching {
-                    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                    conn.requestMethod = "HEAD"
-                    conn.connectTimeout = 5_000
-                    conn.readTimeout = 5_000
-                    conn.instanceFollowRedirects = true
-                    conn.connect()
-                    val code = conn.responseCode
-                    conn.disconnect()
-                    code in 100..599  // any HTTP response = server is alive
-                }.getOrDefault(false)
+            val key = vault.get(profile.kind.name).orEmpty()
+            val result = providerApi.validate(profile.baseUrl, profile.model, key, profile.kind.protocol, emptyList())
+            when (result) {
+                is ConnectionValidation.Success -> _state.update {
+                    it.copy(apiPingStatus = ApiPingStatus.OK, apiPingMessage = "API responded successfully")
+                }
+                is ConnectionValidation.Failure -> _state.update {
+                    it.copy(apiPingStatus = ApiPingStatus.FAILED, apiPingMessage = result.message)
+                }
             }
-            _state.update { it.copy(apiPingStatus = if (ok) ApiPingStatus.OK else ApiPingStatus.FAILED) }
         }
     }
 
@@ -1001,6 +1149,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 taskFinishedAtMillis = null,
                 changes = emptyList(),
                 workspaceFiles = emptyList(),
+                androidProjectDetected = false,
                 filesLoading = true,
                 projectTerminalLines = terminal.lines,
                 projectTerminalLiveOutput = "",
@@ -1059,6 +1208,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 activeChatId = null,
                 changes = emptyList(),
                 workspaceFiles = emptyList(),
+                androidProjectDetected = false,
                 filesLoading = false,
                 isRunning = false,
                 activeSessionId = null,
@@ -1106,6 +1256,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 taskFinishedAtMillis = null,
                 changes = emptyList(),
                 workspaceFiles = emptyList(),
+                androidProjectDetected = false,
                 filesLoading = true,
                 projectTerminalLines = emptyList(),
                 projectTerminalLiveOutput = "",
@@ -1313,8 +1464,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = _state.value.activeProject ?: return
         _state.update { it.copy(filesLoading = true) }
         viewModelScope.launch {
-            val (entries, suggestedRoot) = withContext(Dispatchers.IO) {
-                readWorkspace(project) to if (project.rootPath.isBlank()) detectNestedProjectRoot(project) else null
+            val (entries, suggestedRoot, androidProjectDetected) = withContext(Dispatchers.IO) {
+                Triple(
+                    readWorkspace(project),
+                    if (project.rootPath.isBlank()) detectNestedProjectRoot(project) else null,
+                    findAndroidGradleProjectRoot(projectWorkspaceRoot(project)) != null,
+                )
             }
             if (_state.value.activeProject?.id == project.id) {
                 _state.update {
@@ -1322,6 +1477,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         workspaceFiles = entries,
                         filesLoading = false,
                         suggestedProjectRoot = suggestedRoot,
+                        androidProjectDetected = androidProjectDetected,
                     )
                 }
             }

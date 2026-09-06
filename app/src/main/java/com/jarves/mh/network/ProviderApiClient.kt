@@ -8,7 +8,7 @@ import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-data class DiscoveredModel(val id: String, val displayName: String = id)
+data class DiscoveredModel(val id: String, val displayName: String = id, val isFree: Boolean = false)
 
 sealed interface ModelDiscoveryResult {
     data class Success(val models: List<DiscoveredModel>, val endpoint: String) : ModelDiscoveryResult
@@ -33,7 +33,7 @@ class ProviderApiClient {
         var authError = false
         var lastMessage = "This provider did not expose a model list. You can enter a custom model name."
         for (endpoint in modelEndpoints(baseUrl, protocol)) {
-            val response = request(endpoint, "GET", apiKey)
+            val response = request(endpoint, "GET", apiKey, protocol = protocol)
             when {
                 response.code == 401 || response.code == 403 -> authError = true
                 response.code in 200..299 -> {
@@ -60,29 +60,47 @@ class ProviderApiClient {
         }
         val endpoint = messagesEndpoint(baseUrl, protocol)
         val body = validationBody(model, protocol)
-        val response = request(endpoint, "POST", apiKey, body)
+        val response = request(endpoint, "POST", apiKey, body, protocol, connectTimeoutMs = 8_000, readTimeoutMs = 10_000)
         when {
-            response.code in 200..299 -> ConnectionValidation.Success("Connection successful. Claude Code settings are ready.")
+            response.code in 200..299 -> ConnectionValidation.Success(
+                if (protocol == ProviderProtocol.ANTHROPIC || protocol == ProviderProtocol.ANTHROPIC_GATEWAY || protocol == ProviderProtocol.OPENROUTER) {
+                    "Anthropic Messages endpoint verified. Claude Code settings are ready."
+                } else {
+                    "Connection successful. Claude Code settings are ready."
+                },
+            )
             response.code == 401 || response.code == 403 -> ConnectionValidation.Failure("The API key was rejected.")
             response.code == 404 -> ConnectionValidation.Failure("The API endpoint was not found. Check the base URL.")
             response.code == 400 && response.body.contains("model", ignoreCase = true) ->
                 ConnectionValidation.Failure("The provider did not accept model '$model'. Choose a listed model or check its exact name.")
             response.code > 0 -> ConnectionValidation.Failure(friendlyHttpError(response.code))
+            response.error?.contains("timed out", ignoreCase = true) == true ->
+                ConnectionValidation.Failure("Connection timed out after 10 seconds.")
             else -> ConnectionValidation.Failure(response.error ?: "Could not connect to the provider.")
         }
     }
 
-    private fun request(endpoint: String, method: String, apiKey: String, body: String? = null): HttpResult {
+    private fun request(
+        endpoint: String,
+        method: String,
+        apiKey: String,
+        body: String? = null,
+        protocol: ProviderProtocol,
+        connectTimeoutMs: Int = 12_000,
+        readTimeoutMs: Int = 20_000,
+    ): HttpResult {
         return runCatching {
             val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
-                connectTimeout = 12_000
-                readTimeout = 20_000
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Authorization", "Bearer $apiKey")
-                setRequestProperty("x-api-key", apiKey)
-                setRequestProperty("anthropic-version", "2023-06-01")
+                if (protocol != ProviderProtocol.OPENROUTER && protocol != ProviderProtocol.OPENAI_CHAT && protocol != ProviderProtocol.OPENAI_RESPONSES) {
+                    setRequestProperty("x-api-key", apiKey)
+                    setRequestProperty("anthropic-version", "2023-06-01")
+                }
                 if (body != null) doOutput = true
             }
             if (body != null) connection.outputStream.use { it.write(body.toByteArray()) }
@@ -98,6 +116,7 @@ class ProviderApiClient {
         val base = baseUrl.trim().trimEnd('/')
         val withoutAnthropic = base.removeSuffix("/anthropic")
         val candidates = when (protocol) {
+            ProviderProtocol.OPENROUTER -> listOf("$base/v1/models")
             ProviderProtocol.OPENAI_CHAT, ProviderProtocol.OPENAI_RESPONSES -> listOf("$base/models")
             else -> listOf("$base/v1/models", "$base/models", "$withoutAnthropic/models", "$withoutAnthropic/v1/models")
         }
@@ -107,6 +126,7 @@ class ProviderApiClient {
     private fun messagesEndpoint(baseUrl: String, protocol: ProviderProtocol): String {
         val base = baseUrl.trim().trimEnd('/')
         return when (protocol) {
+            ProviderProtocol.OPENROUTER -> "$base/v1/messages"
             ProviderProtocol.OPENAI_CHAT -> "$base/chat/completions"
             ProviderProtocol.OPENAI_RESPONSES -> "$base/responses"
             else -> "$base/v1/messages"
@@ -158,11 +178,17 @@ object ModelResponseParser {
                         val id = item.optString("id").ifBlank { item.optString("name") }
                         if (id.isNotBlank()) {
                             val label = item.optString("display_name").ifBlank { item.optString("displayName") }.ifBlank { id }
-                            add(DiscoveredModel(id, label))
+                            val pricing = item.optJSONObject("pricing")
+                            val free = id.endsWith(":free", ignoreCase = true) || pricing?.let {
+                                listOf("prompt", "completion", "request").all { field ->
+                                    it.optString(field, "0").toDoubleOrNull() == 0.0
+                                }
+                            } == true
+                            add(DiscoveredModel(id, label, free))
                         }
                     }
                 }
             }
-        }.distinctBy { it.id }.sortedBy { it.id.lowercase() }
+        }.distinctBy { it.id }.sortedWith(compareByDescending<DiscoveredModel> { it.isFree }.thenBy { it.displayName.lowercase() })
     }.getOrDefault(emptyList())
 }

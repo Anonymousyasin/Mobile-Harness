@@ -55,3 +55,12 @@ captures/
 
 
 .gradle-home/
+
+# Locally produced runtime bundles and their downloaded source archives.
+# Publish release artifacts separately; keep the small manifest in Git.
+dist/runtime-bundles/*.tar.zst
+dist/runtime-bundles/*.invalid
+dist/runtime-bundles/sources/
+
+# Generated local in-app update test artifacts.
+dist/update-test/

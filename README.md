@@ -17,7 +17,7 @@
 
   <br />
 
-  [**Download Latest APK (v1.0.2)**](https://github.com/techjarves/Mobile-Harness/releases/latest) &nbsp;•&nbsp;
+  [**Download Latest APK (v1.0.3)**](https://github.com/techjarves/Mobile-Harness/releases/latest) &nbsp;•&nbsp;
   [**Watch Walkthrough (3 min)**](https://youtu.be/QzAau52Z7yQ) &nbsp;•&nbsp;
   [**Quickstart Guide**](#quickstart) &nbsp;•&nbsp;
   [**Architecture**](#architecture) &nbsp;•&nbsp;
@@ -82,6 +82,16 @@ Mobile Harness unites modern **Jetpack Compose UI** with a self-contained **Ubun
       <p>Browse, edit, search, and attach files directly from the app interface. Interoperate with system storage via Android Storage Access Framework (SAF).</p>
     </td>
   </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>On-device Android Builds</h3>
+      <p>Build, install, and launch Android APKs directly on the phone without USB or wireless ADB pairing.</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>Optional Toolchains</h3>
+      <p>Add Python, Android, C/C++, and PHP tooling only when a project needs it.</p>
+    </td>
+  </tr>
 </table>
 
 <br />
@@ -123,7 +133,7 @@ Download the latest signed release APK from [GitHub Releases](https://github.com
 
 ```text
 Target Architecture : ARM64 (arm64-v8a)
-Package Version     : v1.0.2
+Package Version     : v1.0.3
 Minimum OS Level    : Android 9.0 (API 28)
 ```
 
@@ -168,12 +178,15 @@ Mobile Harness uses Claude Code's Anthropic-compatible API protocol. You can con
 | Provider | Integration Type | Streaming | Tool Calling | Status | Notes |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | **Anthropic API** | Direct Key | Supported | Supported | `Recommended` | Primary supported backend |
-| **LLMrouter** | Gateway | Supported | Supported | `Supported` | Anthropic-compatible proxy |
+| **OpenRouter** | Gateway | Supported | Supported | `Supported` | Routes compatible models through one API key |
+| **DeepSeek** | Direct Key | Supported | Supported | `Supported` | Anthropic-compatible endpoint |
+| **Kimi** | Direct Key | Supported | Supported | `Supported` | Anthropic-compatible Moonshot endpoint |
 | **Custom API** | Endpoint Override | Compatible | Compatible | `Experimental` | User-configured gateway |
-| **OpenAI / Kimi Gateway** | Pocket Adapter | Translated | Translated | `Beta` | Requires protocol adapter |
 
 > [!NOTE]
 > All credentials are stored with hardware-backed Android Keystore AES-256-GCM encryption. Keys are decrypted solely in-memory during active bridge operations.
+
+When Android is selected during onboarding, Mobile Harness installs that complete toolchain into its private Ubuntu environment. Android projects can then be built with the workspace play button. The resulting debug APK is passed directly to Android's system package installer and launched after installation; USB debugging, wireless debugging, an ADB port, and a pairing code are not required. Android still requires the user to allow installs from Mobile Harness and confirm each installation.
 
 <br />
 
@@ -336,9 +349,20 @@ Mobile-Harness/
 * **Cryptographic Checksums**: Root filesystem archives and Claude Code CLI packages are verified via SHA-256 checksums prior to extraction.
 * **Encrypted Secrets**: API tokens are encrypted in hardware-backed storage via Android Keystore.
 
+- ARM64 phones only
+- No hardened isolation for hostile code
+- Terminal input/output currently uses a process bridge rather than a complete PTY emulator; full-screen interactive programs may render incorrectly
+- Background tasks are subject to Android process and battery policies
+- Custom providers may lack Claude-compatible thinking, tool use, token counting, or streaming behavior
+- Large builds can be slow and memory-intensive under PRoot
+- Runtime installation requires a substantial download and free storage
+- Project-specific Android libraries may still be downloaded by Gradle when they are not already in the bundled Maven cache
+
 Read our complete [Privacy Policy](PRIVACY.md).
 
 </details>
+
+Mobile Harness is currently intended for signed direct APK distribution and private testing. Its Android-project workflow requests permission to submit user-built APKs to Android's package installer, which requires a dedicated Google Play policy declaration and approval if distributed through Play.
 
 <br />
 
