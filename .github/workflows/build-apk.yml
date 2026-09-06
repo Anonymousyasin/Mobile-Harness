@@ -49,3 +49,11 @@ jobs:
         with:
           name: mobile-harness-arm32-pi
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-harness-pi-32bit-apk
+          path: app/build/outputs/apk/online/debug/*.apk
+          if-no-files-found: ignore
+          retention-days: 30
