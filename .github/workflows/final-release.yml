@@ -6,9 +6,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      apk-file: ${{ steps.find.outputs.apk }}
-      apk-size: ${{ steps.find.outputs.size }}
 
     steps:
       - uses: actions/checkout@v4
@@ -44,20 +41,16 @@ jobs:
           ./gradlew assembleOnlineDebug --no-daemon -Dorg.gradle.jvmargs="-Xmx4g"
 
       - name: Find APK
-        id: find
+        id: find-apk
         run: |
-          APK=$(find app/build/outputs/apk -name "*.apk" -type f 2>/dev/null | head -1)
-          echo "APK: $APK"
-          SIZE=$(ls -lh "$APK" 2>/dev/null | awk '{print $5}')
-          echo "Size: $SIZE"
-          echo "apk=$APK" >> $GITHUB_OUTPUT
-          echo "size=$SIZE" >> $GITHUB_OUTPUT
+          echo "=== APK search ==="
+          find app/build/outputs/apk -name "*.apk" -type f
 
-      - name: Upload artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: mobile-harness-pi-32bit
-          path: app/build/outputs/apk/**/*.apk
+          name: mh-pi-apk
+          path: app/build/outputs/apk/online/debug/app-debug.apk
           retention-days: 30
 
   release:
@@ -70,39 +63,32 @@ jobs:
       - name: Download APK
         uses: actions/download-artifact@v4
         with:
-          name: mobile-harness-pi-32bit
+          name: mh-pi-apk
           path: ./artifact/
 
-      - name: Checksum
+      - name: Checksum + Release
         run: |
           cd artifact/
-          sha256sum *.apk | tee SHA256SUMS.txt
+          sha256sum app-debug.apk | tee SHA256SUMS.txt
           ls -lh
+          echo "=== Creating release ==="
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.0.4-pi
-          name: "Mobile Harness v1.0.4-pi — Pi Agent + 32-bit ARM"
-          draft: false
-          prerelease: true
-          body: |
-            ## Mobile Harness — Pi Agent Edition
+          # Use GitHub CLI to create release
+          gh release create v1.0.4-pi \
+            --repo Anonymousyasin/Mobile-Harness \
+            --title "Mobile Harness v1.0.4-pi — Pi Agent + 32-bit ARM" \
+            --body "## Mobile Harness — Pi Agent Edition
 
-            **Build:** ARM32 (armeabi-v7a) + ARM64 (arm64-v8a)
-            **Harness:** Pi Agent v0.85.1 (replaces Claude Code)
-            **Platform:** Android 9+ (API 28+)
+**Build:** ARM32 (armeabi-v7a) + ARM64 (arm64-v8a)
+**Harness:** Pi Agent v0.85.1 (replaces Claude Code)
+**Platform:** Android 9+ (API 28+)
 
-            ### What's changed
-            - Claude Code CLI replaced with Pi Agent (armv7l binary)
-            - Full 32-bit ARM support via dual ABI build
-            - All existing features preserved
+### What's changed
+- Claude Code CLI replaced with Pi Agent (armv7l binary)
+- Full 32-bit ARM support via dual ABI build
+- All existing features preserved" \
+            --prerelease \
+            app-debug.apk SHA256SUMS.txt
 
-            ### Files
-            - `*.apk` — Debug APK (armeabi-v7a + arm64-v8a)
-            - `SHA256SUMS.txt` — SHA-256 checksums
-          files: |
-            artifact/*.apk
-            artifact/SHA256SUMS.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "=== Release created ==="
+          gh release view v1.0.4-pi --repo Anonymousyasin/Mobile-Harness --json url,tags 2>/dev/null | grep -E "url|tag"
