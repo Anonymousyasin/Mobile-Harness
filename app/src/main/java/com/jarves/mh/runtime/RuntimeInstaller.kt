@@ -103,7 +103,7 @@ class RuntimeInstaller(private val context: Context) {
         return InstalledRuntime(
             proot = File(context.applicationInfo.nativeLibraryDir, "libproot.so"),
             rootfs = rootfs,
-            PI_BINARY = File(rootfs, "usr/local/bin/claude"),
+            pi = File(rootfs, "usr/bin/pi"),
             version = marker.readText().trim(),
         )
     }
@@ -162,47 +162,31 @@ class RuntimeInstaller(private val context: Context) {
             if (archive.parentFile == downloads) archive.delete()
         }
 
-        val pi = File(rootfs, "/data/user/0/com.termux/files/usr/bin/pi")
+        val pi = File(rootfs, "usr/bin/pi")
         check(pi.isFile) { "The Core runtime does not contain Pi Agent" }
         if (!marker.isFile) {
             val bundledVersion = bundledPiMarker.readTextOrNull()
-            require(bundledVersion?.matches(CLAUDE_VERSION_PATTERN) == true) {
+            require(bundledVersion?.matches(PI_VERSION_PATTERN) == true) {
                 "The bundled Pi Agent version is missing"
             }
             marker.writeText(bundledVersion)
         }
         ensureSettingsAndHooks()
 
-        if (hasInternetConnection()) {
-            onProgress(RuntimeInstallProgress("Checking the latest Pi Agent release", 0.32f))
-            runCatching {
-                val latestVersion = fetchText("https://registry.npmjs.org/@anthropic-ai/claude-code/latest")
-                    .let { JSONObject(it).getString("version") }
-                    .also { require(it.matches(CLAUDE_VERSION_PATTERN)) }
-                if (marker.readText().trim() != latestVersion) {
-                    onProgress(RuntimeInstallProgress("Downloading Pi Agent $latestVersion from Anthropic", 0.35f))
-                    val base = "https://downloads.claude.ai/claude-code-releases/$latestVersion"
-                    val manifest = JSONObject(fetchText("$base/manifest.json"))
-                    val checksum = manifest.getJSONObject("platforms").getJSONObject("linux-arm64").getString("checksum")
-                    val downloaded = File(downloads, "claude-$latestVersion")
-                    downloadVerified("$base/linux-arm64/claude", downloaded, checksum) { bytes, total ->
-                        val ratio = if (total > 0) bytes.toFloat() / total else 0f
-                        onProgress(RuntimeInstallProgress("Downloading Pi Agent $latestVersion", 0.35f + ratio * 0.20f, bytes, total.takeIf { it > 0 }))
-                    }
-                    onProgress(RuntimeInstallProgress("Verifying Pi Agent", 0.56f))
-                    claude.parentFile?.mkdirs()
-                    val staged = File(claude.parentFile, ".claude-$latestVersion.installing")
-                    downloaded.inputStream().use { input -> FileOutputStream(staged).use { input.copyTo(it) } }
-                    Os.chmod(staged.absolutePath, 0b111101101)
-                    Os.rename(staged.absolutePath, claude.absolutePath)
-                    downloaded.delete()
-                    marker.writeText(latestVersion)
-                }
-            }.onFailure {
-                onProgress(RuntimeInstallProgress("Using bundled Pi Agent ${marker.readText().trim()}", 0.56f))
+        // Pi Agent is provided locally at usr/bin/pi (verified armv7l v0.85.1)
+        // Skip Anthropic Claude download; use the installed Pi binary
+        val piBinary = File(rootfs, "usr/bin/pi")
+        if (!piBinary.exists()) {
+            // Fallback: copy from Termux install path if available
+            val termuxPi = File("/data/user/0/com.termux/files/usr/bin/pi")
+            if (termuxPi.exists()) {
+                termuxPi.copyTo(piBinary, overwrite = true)
+                Os.chmod(piBinary.absolutePath, 0b111101101)
             }
-        } else {
-            onProgress(RuntimeInstallProgress("Offline — using bundled Pi Agent ${marker.readText().trim()}", 0.56f))
+        }
+        onProgress(RuntimeInstallProgress("Using Pi Agent (local binary)", 0.56f))
+        if (!marker.exists()) {
+            marker.writeText("v0.85.1")
         }
 
         val version = marker.readText().trim()
@@ -1302,7 +1286,7 @@ printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decis
         private const val ANDROID_AAPT2_PROPERTY = "android.aapt2FromMavenOverride"
         private const val ANDROID_AAPT2_GUEST_PATH = "/root/android-sdk/build-tools/35.0.0/aapt2"
         private const val ANDROID_AAPT2_HOST_PATH = "root/android-sdk/build-tools/35.0.0/aapt2"
-        private val CLAUDE_VERSION_PATTERN = Regex("[0-9]+\\.[0-9]+\\.[0-9]+")
+        private val PI_VERSION_PATTERN = Regex("[0-9]+\\.[0-9]+\\.[0-9]+")
         private val CORE_BUNDLE = RuntimeBundle(
             label = "Core",
             fileName = "pocketdev-core-arm64-2026.09.4.tar.zst",
