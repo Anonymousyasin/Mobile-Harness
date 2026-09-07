@@ -25,9 +25,11 @@ class RuntimeLaunchConfigBuilderTest {
         assertTrue(config.arguments.contains("model-a"))
         // Pi runs trusted: project-local files are approved for the run.
         assertTrue(config.arguments.contains("-a"))
-        // The secret travels as a flag value, and is also mirrored into the
-        // provider's native env var so a CLI-side flag rename can't break auth.
-        assertTrue(config.arguments.contains("--api-key"))
+        // The secret stays off argv (provider env var only) and -a is gone:
+        // trust comes from root/.pi/agent/settings.json. Only
+        // probe-verified flags (--mode/--provider/--model) ride along.
+        assertFalse(config.arguments.contains("--api-key"))
+        assertFalse(config.arguments.contains("-a"))
         assertEquals("temporary-secret", config.environment["ANTHROPIC_API_KEY"])
     }
 

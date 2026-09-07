@@ -154,8 +154,8 @@ class PiRuntimeBridge(
                 add("--")
                 add(contextPrompt)
             }
-            // Never log argv verbatim: it carries --api-key. Redact the value
-            // following --api-key and drop the trailing prompt.
+            // Never log argv verbatim (it may carry secrets); redact any
+            // value following --api-key and drop the trailing prompt.
             val safeCommand = command.dropLast(1).mapIndexed { index, arg ->
                 if (index > 0 && command[index - 1] == "--api-key") "••••" else arg
             }

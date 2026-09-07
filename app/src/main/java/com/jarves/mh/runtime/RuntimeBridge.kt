@@ -33,7 +33,7 @@ object RuntimeLaunchConfigBuilder {
 
     /**
      * Maps our provider kinds to Pi's native `--provider` ids.
-     * Pi reads credentials from `--api-key` (or its own env/auth file),
+     * Pi reads credentials from its environment variables (or auth file),
      * so no provider base-URL plumbing is needed. CUSTOM has no dedicated
      * Pi provider: it runs against Pi's Anthropic provider with the user's
      * model and key; arbitrary base URLs require a Pi models.json (future).
@@ -62,8 +62,10 @@ object RuntimeLaunchConfigBuilder {
             else -> piProviderId(profile)
         }
         val model = profile.model.ifBlank { profile.kind.defaultModel }
-        // Pi runs trusted by default (no permission gate); -a trusts
-        // project-local files for the run. Prompt is appended positionally
+        // Only probe-verified flags go on argv (--mode/--provider/--model):
+        // auth travels via the provider env var and project trust via
+        // root/.pi/agent/settings.json, so a CLI-side flag rename can never
+        // fail the run with "unknown option". Prompt is appended positionally
         // by the caller after a "--" separator.
         val args = buildList {
             add("--mode")
@@ -75,19 +77,14 @@ object RuntimeLaunchConfigBuilder {
                 add("--model")
                 add(model)
             }
-            if (!authToken.isNullOrBlank()) {
-                add("--api-key")
-                add(authToken)
-            }
-            add("-a")
         }
         val environment = linkedMapOf(
             "DISABLE_AUTOUPDATER" to "1",
             "DISABLE_TELEMETRY" to "1",
             "PI_TELEMETRY" to "0",
         )
-        // Auth travels via --api-key, but also export the provider's native
-        // env var so a CLI-side flag rename can never silently break auth.
+        // Auth travels via the provider's native env var (Pi's primary
+        // documented mechanism), keeping secrets off argv entirely.
         if (!authToken.isNullOrBlank()) {
             environment[authEnvVar(providerId)] = authToken
         }
