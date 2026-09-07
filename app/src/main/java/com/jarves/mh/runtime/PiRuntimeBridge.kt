@@ -178,6 +178,12 @@ class PiRuntimeBridge(
             coroutineScope {
                 val permissionWatcher = launch { watchPermissionRequests(sessionId) }
                 var lastDiagnostic = ""
+                // Keep the TAIL of all unconsumed output (multi-line, capped):
+                // a Bun/runtime crash often prints the cause several lines up.
+                fun appendDiagnostic(line: String) {
+                    if (line.isBlank()) return
+                    lastDiagnostic = (if (lastDiagnostic.isEmpty()) line else "$lastDiagnostic\n$line").takeLast(2000)
+                }
                 val pendingOutput = StringBuilder()
                 val nativeProcess = process as? NativeSpawnProcess
                     ?: error("Unsupported Android runtime process")
@@ -207,7 +213,7 @@ class PiRuntimeBridge(
                                     throw ProviderSessionException(reason)
                                 }
                                 if (!consumePiEvent(sessionId, line)) {
-                                    lastDiagnostic = line.takeLast(500)
+                                    appendDiagnostic(line)
                                     terminalStatus(line)?.let { (title, detail) ->
                                         eventBus.emit(RuntimeEvent.RuntimeLog(sessionId, title, detail))
                                     }
@@ -219,7 +225,7 @@ class PiRuntimeBridge(
                 }
                 pendingOutput.toString().trim().takeIf(String::isNotBlank)?.let { line ->
                     Log.d("PiBridge", "TRAILING OUTPUT: $line")
-                    if (!consumePiEvent(sessionId, line)) lastDiagnostic = line.takeLast(500)
+                    if (!consumePiEvent(sessionId, line)) appendDiagnostic(line)
                 }
                 val exit = process.waitFor()
                 Log.d("PiBridge", "Process exited with code $exit")
@@ -246,7 +252,11 @@ class PiRuntimeBridge(
                     )
                 } else {
                     if (userStopRequested) throw ProviderSessionException("Stopped by user")
-                    error(lastDiagnostic.ifBlank { "Pi Agent stopped with exit code $exit" })
+                    // ProviderSessionException bypasses friendlyError truncation
+                    // so the full crash tail stays visible in the activity feed.
+                    throw ProviderSessionException(
+                        "Pi Agent exited (code $exit): ${lastDiagnostic.ifBlank { "no output" }}",
+                    )
                 }
             }
         }.onFailure { error ->
@@ -948,7 +958,7 @@ class PiRuntimeBridge(
             message.contains("checksum", true) -> "Runtime verification failed. Nothing unverified was executed."
             message.contains("HTTP 401", true) || message.contains("authentication", true) -> "The provider rejected the saved API key."
             message.isBlank() -> "The Pi Agent runtime could not start."
-            else -> message.take(500)
+            else -> message.take(2000)
         }
     }
 
