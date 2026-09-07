@@ -597,7 +597,7 @@ private fun ConnectionSettings(
     }
 
     OutlinedTextField(baseUrl, onBaseUrl, label = { Text("Base URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(model, onModel, label = { Text("Model name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    OutlinedTextField(model, onModel, label = { Text("Model name") }, supportingText = { Text("Exact model ID (e.g. OpenRouter free: vendor/name:free).", fontSize = 11.sp) }, singleLine = true, modifier = Modifier.fillMaxWidth())
     OutlinedButton(onClick = onModels, enabled = baseUrl.isNotBlank() && apiKey.isNotBlank() && !isDiscovering, modifier = Modifier.fillMaxWidth().height(50.dp)) {
         if (isDiscovering) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
         else Icon(if (models.isEmpty()) Icons.Default.Search else Icons.Default.KeyboardArrowDown, null, Modifier.size(18.dp))

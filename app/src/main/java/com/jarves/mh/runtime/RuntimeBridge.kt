@@ -46,6 +46,14 @@ object RuntimeLaunchConfigBuilder {
         com.jarves.mh.model.ProviderKind.CUSTOM -> "anthropic"
     }
 
+    private fun authEnvVar(piProviderId: String): String = when (piProviderId) {
+        "openrouter" -> "OPENROUTER_API_KEY"
+        "deepseek" -> "DEEPSEEK_API_KEY"
+        "kimi-coding" -> "KIMI_API_KEY"
+        "openai" -> "OPENAI_API_KEY"
+        else -> "ANTHROPIC_API_KEY"
+    }
+
     fun build(profile: ProviderProfile, authToken: String? = null, localGatewayUrl: String? = null): RuntimeLaunchConfig {
         val providerId = when (profile.kind.protocol) {
             com.jarves.mh.model.ProviderProtocol.OPENAI_RESPONSES,
@@ -78,6 +86,11 @@ object RuntimeLaunchConfigBuilder {
             "DISABLE_TELEMETRY" to "1",
             "PI_TELEMETRY" to "0",
         )
+        // Auth travels via --api-key, but also export the provider's native
+        // env var so a CLI-side flag rename can never silently break auth.
+        if (!authToken.isNullOrBlank()) {
+            environment[authEnvVar(providerId)] = authToken
+        }
         return RuntimeLaunchConfig(
             executable = PI_GUEST_PATH,
             arguments = args,

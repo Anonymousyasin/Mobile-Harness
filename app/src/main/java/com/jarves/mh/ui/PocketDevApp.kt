@@ -2065,7 +2065,7 @@ private fun ProviderCredentialsStep(
                         model,
                         { onModel(it); status = null },
                         label = { Text("Model name") },
-                        supportingText = { Text("Select an available model or enter an exact model ID.") },
+                        supportingText = { Text("Enter the exact model ID (e.g. OpenRouter free: vendor/name:free).") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )

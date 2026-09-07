@@ -25,9 +25,22 @@ class RuntimeLaunchConfigBuilderTest {
         assertTrue(config.arguments.contains("model-a"))
         // Pi runs trusted: project-local files are approved for the run.
         assertTrue(config.arguments.contains("-a"))
-        // The secret travels as a flag value, never baked into env dumps.
+        // The secret travels as a flag value, and is also mirrored into the
+        // provider's native env var so a CLI-side flag rename can't break auth.
         assertTrue(config.arguments.contains("--api-key"))
-        assertFalse(config.environment.containsKey("ANTHROPIC_API_KEY"))
+        assertEquals("temporary-secret", config.environment["ANTHROPIC_API_KEY"])
+    }
+
+    @Test
+    fun mirrorsSecretIntoProviderNativeEnvVar() {
+        val openRouter = RuntimeLaunchConfigBuilder.build(
+            ProviderProfile(ProviderKind.LLM_ROUTER, "https://openrouter.ai/api", "model-a", true),
+            authToken = "temporary-openrouter-secret",
+        )
+        assertEquals("temporary-openrouter-secret", openRouter.environment["OPENROUTER_API_KEY"])
+
+        val kimi = RuntimeLaunchConfigBuilder.build(ProviderProfile(ProviderKind.KIMI), authToken = "k")
+        assertEquals("k", kimi.environment["KIMI_API_KEY"])
     }
 
     @Test

@@ -70,6 +70,7 @@ class PiRuntimeBridge(
     private val toolNames = ConcurrentHashMap<String, String>()
     private val seenToolCalls = ConcurrentHashMap.newKeySet<String>()
     private val completedToolCalls = ConcurrentHashMap.newKeySet<String>()
+    private val loggedEventTypes = ConcurrentHashMap.newKeySet<String>()
     private val finishedSessions = ConcurrentHashMap.newKeySet<String>()
     private val projectRoots = ConcurrentHashMap<String, String>()
     @Volatile private var activeProcess: Process? = null
@@ -97,6 +98,9 @@ class PiRuntimeBridge(
         foregroundResultPosted = false
         toolNames.clear()
         seenToolCalls.clear()
+        completedToolCalls.clear()
+        loggedEventTypes.clear()
+        streamedText.clear()
         lastReasoningTokens = 0
         lastReasoningUpdateAt = 0L
         lastThinkingUpdateAt = 0L
@@ -165,6 +169,11 @@ class PiRuntimeBridge(
                 guestWorkspacePath = guestWorkspacePath,
             )
             activeProcess = process
+            // Pi merges piped stdin into the prompt in print mode, but this
+            // session never writes to stdin: close it so Pi sees EOF instead
+            // of blocking forever on an open pipe. Terminal sessions use
+            // separate process instances and keep their stdin.
+            runCatching { process.outputStream.close() }
             if (userStopRequested) process.destroy()
             coroutineScope {
                 val permissionWatcher = launch { watchPermissionRequests(sessionId) }
@@ -455,6 +464,21 @@ class PiRuntimeBridge(
                         message.optString("errorMessage").ifBlank { "Pi Agent reported an error" },
                     )
                 }
+                // Fallback: if no streaming deltas arrived (e.g. a newer Pi
+                // changed the delta shape), still render the final text so a
+                // completed turn never looks like "no response".
+                if (streamedText.isEmpty()) {
+                    val content = message.optJSONArray("content") ?: return
+                    for (index in 0 until content.length()) {
+                        val block = content.optJSONObject(index) ?: continue
+                        if (block.optString("type") == "text") {
+                            block.optString("text").takeIf(String::isNotBlank)?.let {
+                                streamedText.append(it)
+                                eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, it))
+                            }
+                        }
+                    }
+                }
             }
             "tool_execution_start" -> {
                 val id = json.optString("toolCallId")
@@ -497,6 +521,14 @@ class PiRuntimeBridge(
                 // that may remain alive after the answer has already completed.
                 emitCompletedOnce(sessionId)
                 terminateActiveProcessGracefully()
+            }
+            // Never silently drop unknown events: surface a new Pi schema in
+            // the activity feed (once per type) so drift is visible, not silent.
+            else -> {
+                val type = json.optString("type").ifBlank { "<untitled>" }
+                if (loggedEventTypes.add(type)) {
+                    eventBus.emit(RuntimeEvent.RuntimeLog(sessionId, "Agent event", type))
+                }
             }
         }
     }
