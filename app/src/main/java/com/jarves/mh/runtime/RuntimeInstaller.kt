@@ -27,7 +27,7 @@ import org.json.JSONObject
 data class InstalledRuntime(
     val proot: File,
     val rootfs: File,
-    val claude: File,
+    val pi: File,
     val version: String,
 )
 
@@ -55,7 +55,7 @@ class RuntimeInstaller(private val context: Context) {
     private val rootfs = File(runtimeDir, "ubuntu")
     private val downloads = File(context.cacheDir, "runtime-downloads")
     private val marker = File(rootfs, ".pocket-runtime-ready")
-    private val bundledClaudeMarker = File(rootfs, ".pocket-bundled-claude-version")
+    private val bundledPiMarker = File(rootfs, ".pocket-bundled-pi-version")
     private val rootfsMarker = File(rootfs, ".pocket-rootfs-version")
     private val languageToolsMarker = File(rootfs, ".pocket-language-tools-version")
     private val coreToolsMarker = File(rootfs, ".pocket-core-tools-version")
@@ -99,11 +99,11 @@ class RuntimeInstaller(private val context: Context) {
 
     /** Returns the already verified runtime without performing network or update checks. */
     fun installedRuntime(): InstalledRuntime {
-        check(isInstalled()) { "Claude Code setup is incomplete. Reopen Mobile Harness to repair it." }
+        check(isInstalled()) { "Pi Agent setup is incomplete. Reopen Mobile Harness to repair it." }
         return InstalledRuntime(
             proot = File(context.applicationInfo.nativeLibraryDir, "libproot.so"),
             rootfs = rootfs,
-            claude = File(rootfs, "usr/local/bin/claude"),
+            PI_BINARY = File(rootfs, "usr/local/bin/claude"),
             version = marker.readText().trim(),
         )
     }
@@ -162,34 +162,34 @@ class RuntimeInstaller(private val context: Context) {
             if (archive.parentFile == downloads) archive.delete()
         }
 
-        val claude = File(rootfs, "usr/local/bin/claude")
-        check(claude.isFile) { "The Core runtime does not contain Claude Code" }
+        val pi = File(rootfs, "/data/user/0/com.termux/files/usr/bin/pi")
+        check(pi.isFile) { "The Core runtime does not contain Pi Agent" }
         if (!marker.isFile) {
-            val bundledVersion = bundledClaudeMarker.readTextOrNull()
+            val bundledVersion = bundledPiMarker.readTextOrNull()
             require(bundledVersion?.matches(CLAUDE_VERSION_PATTERN) == true) {
-                "The bundled Claude Code version is missing"
+                "The bundled Pi Agent version is missing"
             }
             marker.writeText(bundledVersion)
         }
         ensureSettingsAndHooks()
 
         if (hasInternetConnection()) {
-            onProgress(RuntimeInstallProgress("Checking the latest Claude Code release", 0.32f))
+            onProgress(RuntimeInstallProgress("Checking the latest Pi Agent release", 0.32f))
             runCatching {
                 val latestVersion = fetchText("https://registry.npmjs.org/@anthropic-ai/claude-code/latest")
                     .let { JSONObject(it).getString("version") }
                     .also { require(it.matches(CLAUDE_VERSION_PATTERN)) }
                 if (marker.readText().trim() != latestVersion) {
-                    onProgress(RuntimeInstallProgress("Downloading Claude Code $latestVersion from Anthropic", 0.35f))
+                    onProgress(RuntimeInstallProgress("Downloading Pi Agent $latestVersion from Anthropic", 0.35f))
                     val base = "https://downloads.claude.ai/claude-code-releases/$latestVersion"
                     val manifest = JSONObject(fetchText("$base/manifest.json"))
                     val checksum = manifest.getJSONObject("platforms").getJSONObject("linux-arm64").getString("checksum")
                     val downloaded = File(downloads, "claude-$latestVersion")
                     downloadVerified("$base/linux-arm64/claude", downloaded, checksum) { bytes, total ->
                         val ratio = if (total > 0) bytes.toFloat() / total else 0f
-                        onProgress(RuntimeInstallProgress("Downloading Claude Code $latestVersion", 0.35f + ratio * 0.20f, bytes, total.takeIf { it > 0 }))
+                        onProgress(RuntimeInstallProgress("Downloading Pi Agent $latestVersion", 0.35f + ratio * 0.20f, bytes, total.takeIf { it > 0 }))
                     }
-                    onProgress(RuntimeInstallProgress("Verifying Claude Code", 0.56f))
+                    onProgress(RuntimeInstallProgress("Verifying Pi Agent", 0.56f))
                     claude.parentFile?.mkdirs()
                     val staged = File(claude.parentFile, ".claude-$latestVersion.installing")
                     downloaded.inputStream().use { input -> FileOutputStream(staged).use { input.copyTo(it) } }
@@ -199,10 +199,10 @@ class RuntimeInstaller(private val context: Context) {
                     marker.writeText(latestVersion)
                 }
             }.onFailure {
-                onProgress(RuntimeInstallProgress("Using bundled Claude Code ${marker.readText().trim()}", 0.56f))
+                onProgress(RuntimeInstallProgress("Using bundled Pi Agent ${marker.readText().trim()}", 0.56f))
             }
         } else {
-            onProgress(RuntimeInstallProgress("Offline — using bundled Claude Code ${marker.readText().trim()}", 0.56f))
+            onProgress(RuntimeInstallProgress("Offline — using bundled Pi Agent ${marker.readText().trim()}", 0.56f))
         }
 
         val version = marker.readText().trim()
@@ -242,7 +242,7 @@ class RuntimeInstaller(private val context: Context) {
         // separate `claude --version` probe under PRoot can leave inherited output pipes
         // open on some Android kernels, so the real user session is the launch check.
         onProgress(RuntimeInstallProgress("Setup complete", 1f))
-        return InstalledRuntime(proot, rootfs, claude, version)
+        return InstalledRuntime(proot, rootfs, pi, version)
     }
 
     /**
