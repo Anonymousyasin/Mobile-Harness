@@ -155,15 +155,21 @@ class RuntimeInstaller(private val context: Context) {
             extractZstdTar(archive, staging)
             stripMacosMetadataArtifacts(staging)
             require(File(staging, "usr/bin/bash").isFile) { "Core bundle is missing Bash" }
-            require(File(staging, "usr/bin/pi").isFile) { "Core bundle is missing the Pi agent binary (usr/bin/pi)" }
+            // Pi is installed on demand after activation (older Core bundles predate it).
             rootfs.deleteRecursively()
             check(staging.renameTo(rootfs)) { "Could not activate the Linux environment" }
             writeResolver()
             if (archive.parentFile == downloads) archive.delete()
         }
 
+        ensureSettingsAndHooks()
+
+        // Older Core bundles predate Pi: fetch and install it after unpacking.
+        ensurePiAgent(0.50f, 0.56f, onProgress)
+        onProgress(RuntimeInstallProgress("Using Pi Agent", 0.56f))
+
         val pi = File(rootfs, "usr/bin/pi")
-        check(pi.isFile) { "The Core runtime does not contain Pi Agent" }
+        check(pi.isFile) { "Pi Agent could not be installed. Check your connection and retry setup." }
         if (!marker.isFile) {
             val bundledVersion = bundledPiMarker.readTextOrNull()
             require(bundledVersion?.matches(PI_VERSION_PATTERN) == true) {
@@ -171,9 +177,6 @@ class RuntimeInstaller(private val context: Context) {
             }
             marker.writeText(bundledVersion)
         }
-        ensureSettingsAndHooks()
-
-        onProgress(RuntimeInstallProgress("Using Pi Agent (bundled binary)", 0.56f))
 
         val version = marker.readText().trim()
 
@@ -478,6 +481,99 @@ class RuntimeInstaller(private val context: Context) {
         destination.deleteRecursively()
         check(staging.renameTo(destination)) { "Could not activate ${destination.name}" }
         archive.delete()
+    }
+
+    /**
+     * Guarantees usr/bin/pi inside the unpacked rootfs. Older Core bundles
+     * predate Pi and only ship Bash/Node/Git, so Pi is fetched from its
+     * official GitHub release and installed on first setup. Skipped entirely
+     * when a healthy binary is already present.
+     */
+    private suspend fun ensurePiAgent(
+        from: Float,
+        to: Float,
+        onProgress: suspend (RuntimeInstallProgress) -> Unit,
+    ) {
+        val target = File(rootfs, "usr/bin/pi")
+        if (target.isFile && target.length() >= PI_MIN_BYTES) return
+        val tag = runCatching {
+            JSONObject(fetchText(PI_RELEASE_API)).optString("tag_name")
+        }.getOrNull().takeIf { it.matches(Regex("v?[0-9]+\\.[0-9]+\\.[0-9]+.*")) } ?: PI_FALLBACK_TAG
+        val version = Regex("[0-9]+\\.[0-9]+\\.[0-9]+").find(tag)?.value
+            ?: error("Pi Agent release tag not recognized: $tag")
+        val url = "https://github.com/earendil-works/pi/releases/download/$tag/pi-linux-arm64.tar.gz"
+        downloads.mkdirs()
+        val archive = File(downloads, "pi-agent-$version.tar.gz")
+        try {
+            downloadPlain(url, archive) { downloaded, total ->
+                val ratio = if (total > 0) downloaded.toFloat() / total else 0f
+                onProgress(RuntimeInstallProgress("Downloading Pi Agent $version", from + ratio * (to - from), downloaded, total.takeIf { it > 0 }))
+            }
+            onProgress(RuntimeInstallProgress("Installing Pi Agent $version", to, indeterminate = true))
+            extractPiBinary(archive, target)
+            bundledPiMarker.writeText(version)
+        } finally {
+            runCatching { archive.delete() }
+        }
+        check(target.isFile) { "Pi Agent could not be installed. Check your connection and retry setup." }
+    }
+
+    private suspend fun downloadPlain(
+        url: String,
+        destination: File,
+        onBytes: suspend (downloaded: Long, total: Long) -> Unit,
+    ) {
+        destination.parentFile?.mkdirs()
+        val temporary = File(destination.parentFile, "${destination.name}.part")
+        temporary.delete()
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connectTimeout = 20_000
+        connection.readTimeout = 120_000
+        connection.instanceFollowRedirects = true
+        connection.setRequestProperty("User-Agent", "Mobile-Harness")
+        check(connection.responseCode in 200..299) { "Pi Agent download failed with HTTP ${connection.responseCode}" }
+        val total = connection.contentLengthLong.takeIf { it >= 0L } ?: -1L
+        try {
+            connection.inputStream.use { input ->
+                FileOutputStream(temporary).use { output ->
+                    val buffer = ByteArray(128 * 1024)
+                    var downloaded = 0L
+                    while (true) {
+                        coroutineContext.ensureActive()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        downloaded += count
+                        onBytes(downloaded, total)
+                    }
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+        destination.delete()
+        check(temporary.renameTo(destination)) { "Could not finish Pi Agent download" }
+    }
+
+    private fun extractPiBinary(archive: File, target: File) {
+        require(archive.isFile && archive.length() > PI_MIN_BYTES) { "Pi Agent download looks truncated, retry setup" }
+        TarArchiveInputStream(GzipCompressorInputStream(BufferedInputStream(archive.inputStream()))).use { tar ->
+            var entry = tar.nextEntry
+            while (entry != null) {
+                val name = entry.name.removePrefix("./")
+                if (!entry.isDirectory && (name == PI_TARBALL_ENTRY || (name.endsWith("/pi") && entry.size >= PI_MIN_BYTES))) {
+                    target.parentFile?.mkdirs()
+                    val staging = File(target.parentFile, "${target.name}.installing")
+                    FileOutputStream(staging).use { output -> tar.copyTo(output) }
+                    require(staging.length() >= PI_MIN_BYTES) { "Pi Agent binary looks truncated, retry setup" }
+                    check(staging.renameTo(target)) { "Could not install Pi Agent" }
+                    Os.chmod(target.absolutePath, 0b111101101)
+                    return
+                }
+                entry = tar.nextEntry
+            }
+        }
+        error("Pi Agent binary not found in release archive")
     }
 
     private fun extractZipArchive(archive: File, destination: File) {
@@ -1174,6 +1270,7 @@ class RuntimeInstaller(private val context: Context) {
         connection.connectTimeout = 15_000
         connection.readTimeout = 30_000
         connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("User-Agent", "Mobile-Harness")
         check(connection.responseCode in 200..299) { "Request failed with HTTP ${connection.responseCode}" }
         return connection.inputStream.bufferedReader().use { it.readText() }.also { connection.disconnect() }
     }
@@ -1216,6 +1313,10 @@ class RuntimeInstaller(private val context: Context) {
         private const val ANDROID_AAPT2_GUEST_PATH = "/root/android-sdk/build-tools/35.0.0/aapt2"
         private const val ANDROID_AAPT2_HOST_PATH = "root/android-sdk/build-tools/35.0.0/aapt2"
         private val PI_VERSION_PATTERN = Regex("[0-9]+\\.[0-9]+\\.[0-9]+")
+        private const val PI_RELEASE_API = "https://api.github.com/repos/earendil-works/pi/releases/latest"
+        private const val PI_FALLBACK_TAG = "v0.85.1"
+        private const val PI_TARBALL_ENTRY = "pi/pi"
+        private const val PI_MIN_BYTES = 5_000_000L
         private val CORE_BUNDLE = RuntimeBundle(
             label = "Core",
             fileName = "pocketdev-core-arm64-2026.09.4.tar.zst",
