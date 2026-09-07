@@ -4,55 +4,66 @@ import com.jarves.mh.model.ProviderKind
 import com.jarves.mh.model.ProviderProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RuntimeLaunchConfigBuilderTest {
     @Test
-    fun gatewayProfileUsesCustomBaseUrlAndModel() {
+    fun launchesBundledPiBinaryInJsonMode() {
         val config = RuntimeLaunchConfigBuilder.build(
-            ProviderProfile(ProviderKind.LLM_ROUTER, "https://gateway.example/", "model-a", true),
+            ProviderProfile(ProviderKind.ANTHROPIC, "https://api.anthropic.com", "model-a", true),
+            authToken = "temporary-secret",
         )
 
-        assertEquals("https://gateway.example", config.environment["ANTHROPIC_BASE_URL"])
-        assertEquals("model-a", config.environment["ANTHROPIC_MODEL"])
+        assertEquals("/usr/bin/pi", config.executable)
+        assertTrue(config.arguments.contains("--mode"))
+        assertTrue(config.arguments.contains("json"))
+        assertTrue(config.arguments.contains("-p"))
+        assertTrue(config.arguments.contains("--provider"))
+        assertTrue(config.arguments.contains("anthropic"))
+        assertTrue(config.arguments.contains("--model"))
+        assertTrue(config.arguments.contains("model-a"))
+        // Pi runs trusted: project-local files are approved for the run.
+        assertTrue(config.arguments.contains("-a"))
+        // The secret travels as a flag value, never baked into env dumps.
+        assertTrue(config.arguments.contains("--api-key"))
+        assertFalse(config.environment.containsKey("ANTHROPIC_API_KEY"))
+    }
+
+    @Test
+    fun mapsProviderKindsToPiProviderIds() {
+        assertEquals(
+            "openrouter",
+            RuntimeLaunchConfigBuilder.piProviderId(ProviderProfile(ProviderKind.LLM_ROUTER)),
+        )
+        assertEquals(
+            "deepseek",
+            RuntimeLaunchConfigBuilder.piProviderId(ProviderProfile(ProviderKind.DEEPSEEK)),
+        )
+        assertEquals(
+            "kimi-coding",
+            RuntimeLaunchConfigBuilder.piProviderId(ProviderProfile(ProviderKind.KIMI)),
+        )
+    }
+
+    @Test
+    fun disablesPiTelemetryAndAutoUpdate() {
+        val config = RuntimeLaunchConfigBuilder.build(ProviderProfile(ProviderKind.ANTHROPIC))
+
         assertEquals("1", config.environment["DISABLE_AUTOUPDATER"])
-        assertFalse(config.arguments.contains("--dangerously-skip-permissions"))
+        assertEquals("1", config.environment["DISABLE_TELEMETRY"])
+        assertEquals("0", config.environment["PI_TELEMETRY"])
     }
 
     @Test
-    fun kimiUsesItsAnthropicCompatibleEndpointDirectly() {
-        val config = RuntimeLaunchConfigBuilder.build(ProviderProfile(ProviderKind.KIMI))
-
-        assertEquals("https://api.moonshot.ai/anthropic", config.environment["ANTHROPIC_BASE_URL"])
-        assertEquals("kimi-k2.6", config.environment["ANTHROPIC_MODEL"])
-    }
-
-    @Test
-    fun configuresEveryClaudeModelRoleAndInMemoryAuth() {
+    fun openAiProtocolKindsUsePiOpenAiProvider() {
         val config = RuntimeLaunchConfigBuilder.build(
             ProviderProfile(ProviderKind.CUSTOM, "https://example.test/anthropic", "custom-model", true),
             authToken = "temporary-secret",
         )
 
-        assertEquals("custom-model", config.environment["ANTHROPIC_DEFAULT_OPUS_MODEL"])
-        assertEquals("custom-model", config.environment["ANTHROPIC_DEFAULT_SONNET_MODEL"])
-        assertEquals("custom-model", config.environment["ANTHROPIC_DEFAULT_HAIKU_MODEL"])
-        assertEquals("custom-model", config.environment["CLAUDE_CODE_SUBAGENT_MODEL"])
-        assertEquals("1", config.environment["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"])
-        assertEquals("temporary-secret", config.environment["ANTHROPIC_AUTH_TOKEN"])
-        assertEquals("temporary-secret", config.environment["ANTHROPIC_API_KEY"])
-    }
-
-    @Test
-    fun openRouterMatchesVerifiedClaudeCodeEnvironment() {
-        val config = RuntimeLaunchConfigBuilder.build(
-            ProviderProfile(ProviderKind.LLM_ROUTER, "https://openrouter.ai/api/", "stealth/ox-alpha", true),
-            authToken = "temporary-openrouter-secret",
-        )
-
-        assertEquals("https://openrouter.ai/api", config.environment["ANTHROPIC_BASE_URL"])
-        assertEquals("temporary-openrouter-secret", config.environment["ANTHROPIC_AUTH_TOKEN"])
-        assertEquals("temporary-openrouter-secret", config.environment["OPENROUTER_API_KEY"])
-        assertEquals("", config.environment["ANTHROPIC_API_KEY"])
+        assertEquals("/usr/bin/pi", config.executable)
+        assertTrue(config.arguments.contains("custom-model"))
+        assertFalse(config.arguments.contains("--dangerously-skip-permissions"))
     }
 }

@@ -47,7 +47,7 @@ Java_com_jarves_mh_runtime_NativeSpawn_spawn(JNIEnv *env, jobject self, jobjectA
     pid_t pid = fork();
     if (pid == 0) {
         // Give every runtime launch its own process group so stopping the wrapper
-        // also stops Claude Code and commands spawned underneath it.
+        // also stops Pi Agent and commands spawned underneath it.
         setpgid(0, 0);
         close(in_pipe[1]);
         int output_fd = open(output_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);

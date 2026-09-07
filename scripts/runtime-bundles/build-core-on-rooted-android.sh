@@ -6,8 +6,9 @@ set -euo pipefail
 ADB_SERIAL="${ADB_SERIAL:-}"
 REMOTE="${POCKETDEV_REMOTE_DIR:-/data/adb/pocketdev-bundle}"
 VERSION="${POCKETDEV_CORE_VERSION:-2026.09.4}"
-CLAUDE_VERSION="${POCKETDEV_CLAUDE_VERSION:-2.1.261}"
-CLAUDE_SHA256="${POCKETDEV_CLAUDE_SHA256:-7bbed5a9b0fc2e4ec67bad3490d06ca91b86d6b037d47520b7898951757d1b8a}"
+# Pi agent: latest release at bundle build time (override with POCKETDEV_PI_VERSION).
+PI_VERSION="${POCKETDEV_PI_VERSION:-$(curl -fsSL https://api.github.com/repos/earendil-works/pi/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)}"
+PI_VERSION_NUMBER="${PI_VERSION#v}"
 DNS_SERVER="${POCKETDEV_DNS:-1.1.1.1}"
 ROOTFS_FILE="ubuntu-base-20.04.5-base-arm64.tar.gz"
 ROOTFS_SHA256="f9b999afb4c4b10193087ea8c11be36d688f19e609b05179b571f29357954b52"
@@ -29,9 +30,10 @@ trap 'rm -rf "$temp_dir"' EXIT
 curl -fL --retry 3 -o "$temp_dir/$ROOTFS_FILE" "$ROOTFS_URL"
 printf '%s  %s\n' "$ROOTFS_SHA256" "$temp_dir/$ROOTFS_FILE" | shasum -a 256 -c -
 adb_cmd push "$temp_dir/$ROOTFS_FILE" /data/local/tmp/"$ROOTFS_FILE"
-curl -fL --retry 3 -o "$temp_dir/claude" "https://downloads.claude.ai/claude-code-releases/$CLAUDE_VERSION/linux-arm64/claude"
-printf '%s  %s\n' "$CLAUDE_SHA256" "$temp_dir/claude" | shasum -a 256 -c -
-adb_cmd push "$temp_dir/claude" /data/local/tmp/pocketdev-claude
+curl -fL --retry 3 -o "$temp_dir/pi.tar.gz" "https://github.com/earendil-works/pi/releases/download/$PI_VERSION/pi-linux-arm64.tar.gz"
+echo "Pi agent version: $PI_VERSION ($PI_VERSION_NUMBER)"
+tar -xzf "$temp_dir/pi.tar.gz" -C "$temp_dir" pi/pi
+adb_cmd push "$temp_dir/pi/pi" /data/local/tmp/pocketdev-pi
 
 adb_cmd shell "su -c 'rm -rf $REMOTE; mkdir -p $REMOTE/rootfs $REMOTE/output; toybox tar -xzf /data/local/tmp/$ROOTFS_FILE -C $REMOTE/rootfs; rm -f /data/local/tmp/$ROOTFS_FILE'"
 adb_cmd shell "su -c 'mount --bind /dev $REMOTE/rootfs/dev; mount -t proc proc $REMOTE/rootfs/proc; mount -t sysfs sysfs $REMOTE/rootfs/sys'"
@@ -44,7 +46,7 @@ guest() {
 guest "printf 'nameserver $DNS_SERVER\\n' > /etc/resolv.conf; apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade"
 guest "DEBIAN_FRONTEND=noninteractive apt-get install -y git ca-certificates curl wget unzip zip xz-utils zstd"
 guest "set -e; NODE_VERSION=v24.19.0; NODE_FILE=node-\\${NODE_VERSION}-linux-arm64.tar.gz; cd /tmp; curl -fsSLO https://nodejs.org/dist/\\${NODE_VERSION}/\\${NODE_FILE}; curl -fsSL https://nodejs.org/dist/\\${NODE_VERSION}/SHASUMS256.txt | grep \\\"  \\${NODE_FILE}\\\" | sha256sum -c -; mkdir -p /usr/local/lib/nodejs; tar -xzf \\${NODE_FILE} -C /usr/local/lib/nodejs; ln -sfn /usr/local/lib/nodejs/node-\\${NODE_VERSION} /usr/local/lib/nodejs/current; ln -sfn /usr/local/lib/nodejs/current/bin/node /usr/local/bin/node; ln -sfn /usr/local/lib/nodejs/current/bin/npm /usr/local/bin/npm; ln -sfn /usr/local/lib/nodejs/current/bin/npx /usr/local/bin/npx; rm -f /tmp/\\${NODE_FILE}"
-adb_cmd shell "su -c 'cp /data/local/tmp/pocketdev-claude $REMOTE/rootfs/usr/local/bin/claude; chmod 0755 $REMOTE/rootfs/usr/local/bin/claude; echo $CLAUDE_VERSION > $REMOTE/rootfs/.pocket-bundled-claude-version; echo $CLAUDE_VERSION > $REMOTE/rootfs/.pocket-runtime-ready; rm -f /data/local/tmp/pocketdev-claude'"
+adb_cmd shell "su -c 'cp /data/local/tmp/pocketdev-pi $REMOTE/rootfs/usr/bin/pi; chmod 0755 $REMOTE/rootfs/usr/bin/pi; echo $PI_VERSION_NUMBER > $REMOTE/rootfs/.pocket-bundled-pi-version; echo $PI_VERSION_NUMBER > $REMOTE/rootfs/.pocket-runtime-ready; rm -f /data/local/tmp/pocketdev-pi'"
 guest "apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/* /var/tmp/*"
 
 guest "mkdir -p /workspace /opt/pocketdev /root/.gradle/init.d; printf 'ubuntu-20.04.5-arm64\\n' > /.pocket-rootfs-version; printf 'core-bundle-$VERSION\\n' > /.pocket-core-tools-version; printf 'ubuntu-maintenance-v1\\n' > /.pocket-system-upgrade-version; printf '{\\\"WEB\\\":true,\\\"PYTHON\\\":false,\\\"CPP\\\":false,\\\"PHP\\\":false,\\\"ANDROID\\\":false}\\n' > /.pocket-dev-stacks.json"

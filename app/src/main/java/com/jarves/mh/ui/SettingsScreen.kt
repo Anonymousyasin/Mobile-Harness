@@ -207,7 +207,7 @@ private fun LegacySettingsScreen(
                 ) {
                     Column(Modifier.fillMaxWidth().padding(14.dp)) {
                         Text(
-                            "Node.js, npm, and Git are always installed — Claude Code runs on them.",
+                            "Node.js, npm, and Git are always installed — the Pi agent runs on them.",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -653,7 +653,7 @@ private fun LegacySettingsScreen(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                         InfoRow(icon = Icons.Default.Terminal, label = "Linux Rootfs", value = "Ubuntu 20.04 PRoot")
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                        InfoRow(icon = Icons.Default.SmartToy, label = "Developer tools", value = "Claude Code + Node.js 24 + Python 3")
+                        InfoRow(icon = Icons.Default.SmartToy, label = "Developer tools", value = "Pi Agent + Node.js 24 + Python 3")
 
                         Spacer(Modifier.height(4.dp))
                         OutlinedButton(
@@ -735,7 +735,7 @@ private fun LegacySettingsScreen(
                             Text("v1.0.0", color = PocketOrange, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                         }
                         Text(
-                            "Autonomous AI Developer with native on-device Linux PRoot sandbox and Claude Code integration.",
+                            "Autonomous AI Developer with native on-device Linux PRoot sandbox and Pi Agent integration.",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 18.sp,

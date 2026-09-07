@@ -31,12 +31,16 @@ jobs:
           restore-keys: gradle-
 
       - name: Download Pi agent binary (ARM64 + ARM32)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p app/src/main/assets/pi/
-          # Pi v0.85.1 - ARM64 Linux binary
-          curl -sL "https://github.com/earendil-works/pi/releases/download/v0.85.1/pi-linux-arm64.tar.gz" \
+          # Latest Pi agent - ARM64 Linux binary (resolved at build time)
+          PI_TAG=$(gh api repos/earendil-works/pi/releases/latest --jq .tag_name)
+          echo "Pi tag: $PI_TAG"
+          curl -sL "https://github.com/earendil-works/pi/releases/download/${PI_TAG}/pi-linux-arm64.tar.gz" \
             -o pi-linux-arm64.tar.gz
-          echo "Downloaded ARM64 Pi binary"
+          echo "Downloaded ARM64 Pi binary ($PI_TAG)"
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew

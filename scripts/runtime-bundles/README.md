@@ -9,16 +9,14 @@ partitions, Magisk files, device identifiers, or user data are included.
 
 ## Bundle layout
 
-- `core`: Ubuntu, Node, Git, and a pinned Claude Code ARM64 fallback. PocketDev
-  checks for a newer Claude release when validated internet is available, but a
-  failed or offline update never blocks setup.
+- `core`: Ubuntu, Node, Git, and the Pi agent ARM64 binary (latest release at
+  bundle build time) at `usr/bin/pi`. Setup requires the bundled Pi binary;
+  a missing binary fails fast instead of falling back to a download.
 - `python`: Python, pip, venv, and build tools. Downloaded only when selected.
 - `android`: a portable JDK 17, Android SDK, ARM64 build tools, Gradle, the
   offline Maven repository, and PocketDev's global ARM64 AAPT2 configuration.
 - `cpp`: GCC, G++, make, CMake, and GDB.
 - `php`: PHP CLI, common extensions, and Composer.
-- Claude Code remains separate so PocketDev can install or update Anthropic's
-  signed ARM64 binary independently of the larger runtime bundles.
 
 The current artifact metadata and SHA-256 checksums live in
 `dist/runtime-bundles/manifest.json`. Large `.tar.zst` files and downloaded

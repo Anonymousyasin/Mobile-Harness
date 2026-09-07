@@ -31,7 +31,7 @@ import com.jarves.mh.model.generateQuickChatIdentity
 import com.jarves.mh.network.ConnectionValidation
 import com.jarves.mh.network.ModelDiscoveryResult
 import com.jarves.mh.network.ProviderApiClient
-import com.jarves.mh.runtime.ClaudeRuntimeBridge
+import com.jarves.mh.runtime.PiRuntimeBridge
 import com.jarves.mh.runtime.NativeSpawnProcess
 import com.jarves.mh.runtime.RuntimeInstallProgress
 import com.jarves.mh.runtime.RuntimeInstaller
@@ -159,7 +159,7 @@ data class AppUiState(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val vault = ApiKeyVault(application)
     private val preferences = AppPreferences(application)
-    private val runtime = ClaudeRuntimeBridge(application) { profile -> vault.get(profile.kind.name) }
+    private val runtime = PiRuntimeBridge(application) { profile -> vault.get(profile.kind.name) }
     private val installer = RuntimeInstaller(application)
     private val providerApi = ProviderApiClient()
     private fun appUpdater(): AppUpdater = AppUpdater(
@@ -220,7 +220,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val workspaceDir = File(application.filesDir, "workspaces/${project.id}")
                 val userFiles = if (workspaceDir.isDirectory) {
                     workspaceDir.walkTopDown().filter { file ->
-                        file.isFile && !file.name.startsWith(".claude") && file.name != ".pocket-dev-stacks.json"
+                        file.isFile && !file.name.startsWith(".claude") && !file.name.startsWith(".pi") && file.name != ".pocket-dev-stacks.json"
                     }.count()
                 } else 0
                 val keep = userMessages > 0 || userFiles > 0
@@ -676,7 +676,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val project = _state.value.activeProject ?: return
         if (_state.value.androidBuildRunning) return
         if (_state.value.isRunning) {
-            _state.update { it.copy(toastMessage = "Wait for Claude to finish creating the project before building.") }
+            _state.update { it.copy(toastMessage = "Wait for Pi Agent to finish creating the project before building.") }
             return
         }
         if (_state.value.projectTerminalRunning) {
@@ -688,7 +688,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 val installed = installer.installedRuntime()
                 val workspace = findAndroidGradleProjectRoot(projectWorkspaceRoot(project))
-                    ?: error("No Android Gradle project found yet. Ask Claude to create it, then wait for the task to finish.")
+                    ?: error("No Android Gradle project found yet. Ask Pi Agent to create it, then wait for the task to finish.")
                 val process = installer.process(
                     installed.proot, installed.rootfs, workspace, emptyMap(),
                     listOf(
@@ -919,7 +919,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             pingApi()
             checkForAppUpdate()
         } else {
-            showStartupError(result.exceptionOrNull() ?: IllegalStateException("Claude Code initialization failed"))
+            showStartupError(result.exceptionOrNull() ?: IllegalStateException("Pi Agent initialization failed"))
         }
     }
 
@@ -1027,7 +1027,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun finishOnboarding(profile: ProviderProfile, secret: String) {
         vault.put(profile.kind.name, secret)
         val saved = profile.copy(
-            hasSecret = secret.isNotBlank() || vault.contains(profile.kind.name) || profile.kind == ProviderKind.CLAUDE,
+            hasSecret = secret.isNotBlank() || vault.contains(profile.kind.name),
         )
         preferences.saveProvider(saved)
         preferences.onboardingComplete = true
@@ -1185,7 +1185,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val workspaceDir = File(getApplication<Application>().filesDir, "workspaces/${active.id}")
             val userFiles = if (workspaceDir.isDirectory) {
                 workspaceDir.walkTopDown().filter { file ->
-                    file.isFile && !file.name.startsWith(".claude") && file.name != ".pocket-dev-stacks.json"
+                    file.isFile && !file.name.startsWith(".claude") && !file.name.startsWith(".pi") && file.name != ".pocket-dev-stacks.json"
                 }.count()
             } else 0
 
@@ -1327,7 +1327,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val base = File(getApplication<Application>().filesDir, "workspaces/${project.id}")
         if (!base.isDirectory) return null
         val visible = base.listFiles().orEmpty().filterNot { file ->
-            file.name == ".claude" || file.name == ".claude.json"
+            file.name == ".claude" || file.name == ".claude.json" || file.name == ".pi"
         }
         val onlyDirectory = visible.singleOrNull()?.takeIf(File::isDirectory) ?: return null
         val containsProjectFiles = onlyDirectory.walkTopDown()
@@ -1520,7 +1520,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .maxDepth(12)
             .onEnter { directory ->
                 val relative = if (directory == root) "" else directory.relativeTo(root).invariantSeparatorsPath
-                directory == root || (!isClaudeRuntimeMetadata(relative) &&
+                directory == root || (!isAgentRuntimeMetadata(relative) &&
                     !Files.isSymbolicLink(directory.toPath()) &&
                     runCatching { directory.canonicalFile.toPath().startsWith(rootPath) }.getOrDefault(false)
                     )
@@ -1528,7 +1528,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .drop(1)
             .filter { file ->
                 val relative = file.relativeTo(root).invariantSeparatorsPath
-                !isClaudeRuntimeMetadata(relative) &&
+                !isAgentRuntimeMetadata(relative) &&
                     !Files.isSymbolicLink(file.toPath()) &&
                     runCatching { file.canonicalFile.toPath().startsWith(rootPath) }.getOrDefault(false)
             }
@@ -1547,18 +1547,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .toList()
     }
 
-    private fun isClaudeRuntimeMetadata(relativePath: String): Boolean {
-        return relativePath == ".claude" ||
+    private fun isAgentRuntimeMetadata(relativePath: String): Boolean {
+        // Pi metadata plus legacy Claude metadata from older installs.
+        return relativePath == ".pi" ||
+            relativePath.startsWith(".pi/") ||
+            relativePath == ".claude" ||
             relativePath == ".claude.json" ||
             relativePath.startsWith(".claude/")
     }
 
     private fun isExportExcludedPath(relativePath: String): Boolean {
         val excludedNames = setOf(
-            ".git", ".claude", ".gradle", ".idea", ".next", ".cache",
+            ".git", ".claude", ".pi", ".gradle", ".idea", ".next", ".cache",
             "node_modules", ".venv", "venv", "__pycache__", "build",
         )
-        return relativePath.split('/').any { it in excludedNames } || isClaudeRuntimeMetadata(relativePath)
+        return relativePath.split('/').any { it in excludedNames } || isAgentRuntimeMetadata(relativePath)
     }
 
     fun addChatAttachments(uris: List<Uri>) {
@@ -1789,13 +1792,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun isNoisyRuntimeItem(item: ActivityItem): Boolean {
         val combined = "${item.title} ${item.detail}"
-        return combined.contains("Starting Claude Code", true) ||
+        return combined.contains("Starting Pi Agent", true) ||
             combined.contains("Agent process started", true) ||
-            combined.contains("Claude Code connected", true) ||
+            combined.contains("Pi Agent connected", true) ||
             combined.contains("Runtime warning", true) ||
             combined.contains("unrecognized_model", true) ||
             combined.contains("Writing response", true) ||
-            combined.contains("Claude Code finished", true) ||
+            combined.contains("Pi Agent finished", true) ||
             combined.contains("Task completed", true)
     }
 
@@ -1820,12 +1823,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun requestPlanningSummary(request: String, toolName: String? = null, detail: String = ""): String {
         val cleanRequest = request.replace(Regex("\\s+"), " ").trim().take(110)
         val requestPart = if (cleanRequest.isBlank()) {
-            "Claude is reviewing the request"
+            "Pi Agent is reviewing the request"
         } else {
             "The user is asking: “$cleanRequest”"
         }
         return if (toolName == null) {
-            "$requestPart. Claude is deciding the next useful step."
+            "$requestPart. Pi Agent is deciding the next useful step."
         } else {
             "$requestPart. ${toolPlanSummary(toolName, detail)}."
         }
@@ -1967,10 +1970,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 is RuntimeEvent.ToolApproved -> appendWorkItem(current.copy(
                     pendingApproval = null,
                     activity = listOf(ActivityItem("Applying approved changes", "Editing project files", false)) + current.activity,
-                ), ActivityItem("Action approved", "Claude is continuing the task", false))
+                ), ActivityItem("Action approved", "Pi Agent is continuing the task", false))
                 is RuntimeEvent.ToolRejected -> appendWorkItem(current.copy(
                     pendingApproval = null,
-                ), ActivityItem("Action rejected", "Claude will continue without this action"))
+                ), ActivityItem("Action rejected", "Pi Agent will continue without this action"))
                 is RuntimeEvent.ToolCompleted -> {
                     val runningIndex = current.liveProcess.indexOfLast {
                         !it.isComplete && it.title == "Running ${event.toolName}"
@@ -2019,7 +2022,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 is RuntimeEvent.SessionCompleted -> finishWorkSegment(current).copy(
                     isRunning = false,
                     activeSessionId = null,
-                    activity = listOf(ActivityItem("Task completed", "Claude Code finished successfully")) +
+                    activity = listOf(ActivityItem("Task completed", "Pi Agent finished successfully")) +
                         current.activity.map { if (!it.isComplete) it.copy(isComplete = true) else it },
                     taskFinishedAtMillis = System.currentTimeMillis(),
                     currentTaskRequest = null,

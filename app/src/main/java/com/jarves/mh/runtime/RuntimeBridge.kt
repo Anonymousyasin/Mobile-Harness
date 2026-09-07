@@ -28,55 +28,59 @@ interface RuntimeBridge {
 }
 
 object RuntimeLaunchConfigBuilder {
+    /** Guest (PRoot) path of the Pi agent binary inside the Ubuntu rootfs. */
+    const val PI_GUEST_PATH = "/usr/bin/pi"
+
+    /**
+     * Maps our provider kinds to Pi's native `--provider` ids.
+     * Pi reads credentials from `--api-key` (or its own env/auth file),
+     * so no provider base-URL plumbing is needed. CUSTOM has no dedicated
+     * Pi provider: it runs against Pi's Anthropic provider with the user's
+     * model and key; arbitrary base URLs require a Pi models.json (future).
+     */
+    fun piProviderId(profile: ProviderProfile): String = when (profile.kind) {
+        com.jarves.mh.model.ProviderKind.ANTHROPIC -> "anthropic"
+        com.jarves.mh.model.ProviderKind.LLM_ROUTER -> "openrouter"
+        com.jarves.mh.model.ProviderKind.DEEPSEEK -> "deepseek"
+        com.jarves.mh.model.ProviderKind.KIMI -> "kimi-coding"
+        com.jarves.mh.model.ProviderKind.CUSTOM -> "anthropic"
+    }
+
     fun build(profile: ProviderProfile, authToken: String? = null, localGatewayUrl: String? = null): RuntimeLaunchConfig {
-        val environment = linkedMapOf("DISABLE_AUTOUPDATER" to "1")
-        when (profile.kind.protocol) {
-            com.jarves.mh.model.ProviderProtocol.CLAUDE_LOGIN -> Unit
-            com.jarves.mh.model.ProviderProtocol.ANTHROPIC -> {
-                environment["ANTHROPIC_BASE_URL"] = profile.baseUrl.trimEnd('/')
-                environment["ANTHROPIC_MODEL"] = profile.model
-            }
-            com.jarves.mh.model.ProviderProtocol.ANTHROPIC_GATEWAY -> {
-                environment["ANTHROPIC_BASE_URL"] = profile.baseUrl.trimEnd('/')
-                environment["ANTHROPIC_MODEL"] = profile.model
-            }
-            com.jarves.mh.model.ProviderProtocol.OPENROUTER -> {
-                environment["ANTHROPIC_BASE_URL"] = profile.baseUrl.trimEnd('/')
-                environment["ANTHROPIC_MODEL"] = profile.model
-            }
+        val providerId = when (profile.kind.protocol) {
             com.jarves.mh.model.ProviderProtocol.OPENAI_RESPONSES,
             com.jarves.mh.model.ProviderProtocol.OPENAI_CHAT,
-            -> {
-                require(!localGatewayUrl.isNullOrBlank()) { "A local format gateway is required for this provider" }
-                environment["ANTHROPIC_BASE_URL"] = localGatewayUrl.trimEnd('/')
-                environment["ANTHROPIC_MODEL"] = "claude-sonnet-4-6"
-            }
+            -> "openai"
+            else -> piProviderId(profile)
         }
-        val runtimeModel = environment["ANTHROPIC_MODEL"] ?: profile.model
-        if (profile.kind.protocol != com.jarves.mh.model.ProviderProtocol.CLAUDE_LOGIN) {
-            environment["ANTHROPIC_DEFAULT_OPUS_MODEL"] = runtimeModel
-            environment["ANTHROPIC_DEFAULT_SONNET_MODEL"] = runtimeModel
-            environment["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = runtimeModel
-            environment["ANTHROPIC_SMALL_MODEL"] = runtimeModel
-            environment["ANTHROPIC_FAST_MODEL"] = runtimeModel
-            environment["CLAUDE_CODE_SUBAGENT_MODEL"] = runtimeModel
-            environment["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
-            environment["CLAUDE_CODE_DISABLE_TOKEN_COUNTING"] = "1"
-            environment["DISABLE_TELEMETRY"] = "1"
+        val model = profile.model.ifBlank { profile.kind.defaultModel }
+        // Pi runs trusted by default (no permission gate); -a trusts
+        // project-local files for the run. Prompt is appended positionally
+        // by the caller after a "--" separator.
+        val args = buildList {
+            add("--mode")
+            add("json")
+            add("-p")
+            add("--provider")
+            add(providerId)
+            if (model.isNotBlank()) {
+                add("--model")
+                add(model)
+            }
             if (!authToken.isNullOrBlank()) {
-                environment["ANTHROPIC_AUTH_TOKEN"] = authToken
-                if (profile.kind == com.jarves.mh.model.ProviderKind.LLM_ROUTER) {
-                    environment["ANTHROPIC_API_KEY"] = ""
-                    environment["OPENROUTER_API_KEY"] = authToken
-                } else {
-                    environment["ANTHROPIC_API_KEY"] = authToken
-                }
+                add("--api-key")
+                add(authToken)
             }
+            add("-a")
         }
-        val executable = "/data/user/0/com.termux/files/usr/bin/pi"
+        val environment = linkedMapOf(
+            "DISABLE_AUTOUPDATER" to "1",
+            "DISABLE_TELEMETRY" to "1",
+            "PI_TELEMETRY" to "0",
+        )
         return RuntimeLaunchConfig(
-            executable = executable,
-            arguments = listOf("--provider", "anthropic", "--mode", "json", "--print", "-p"),
+            executable = PI_GUEST_PATH,
+            arguments = args,
             environment = environment,
         )
     }

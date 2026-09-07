@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Small loopback-only Anthropic-to-OpenAI compatibility bridge for Claude Code. */
+/** Small loopback-only Anthropic-to-OpenAI compatibility bridge for Pi Agent's OpenAI-protocol providers. */
 internal class LocalFormatGateway(
     private val profile: ProviderProfile,
     private val apiKey: String,

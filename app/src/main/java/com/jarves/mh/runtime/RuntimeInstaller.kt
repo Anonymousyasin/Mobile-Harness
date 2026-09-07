@@ -74,7 +74,7 @@ class RuntimeInstaller(private val context: Context) {
         val ready = proot.canExecute() &&
             File(rootfs, "usr/bin/bash").exists() &&
             rootfsMarker.readTextOrNull() == ROOTFS_VERSION &&
-            (pi.isFile || File(rootfs, "usr/local/bin/claude").exists()) &&
+            pi.isFile &&
             File(rootfs, "usr/local/bin/node").exists() &&
             (legacyLanguageTools || coreToolsReady) &&
             marker.exists()
@@ -155,7 +155,7 @@ class RuntimeInstaller(private val context: Context) {
             extractZstdTar(archive, staging)
             stripMacosMetadataArtifacts(staging)
             require(File(staging, "usr/bin/bash").isFile) { "Core bundle is missing Bash" }
-            require(File(staging, "usr/bin/pi").isFile || File(staging, "usr/local/bin/claude").isFile) { "Core bundle is missing agent binary (pi/claude)" }
+            require(File(staging, "usr/bin/pi").isFile) { "Core bundle is missing the Pi agent binary (usr/bin/pi)" }
             rootfs.deleteRecursively()
             check(staging.renameTo(rootfs)) { "Could not activate the Linux environment" }
             writeResolver()
@@ -173,21 +173,7 @@ class RuntimeInstaller(private val context: Context) {
         }
         ensureSettingsAndHooks()
 
-        // Pi Agent is provided locally at usr/bin/pi (verified armv7l v0.85.1)
-        // Skip Anthropic Claude download; use the installed Pi binary
-        val piBinary = File(rootfs, "usr/bin/pi")
-        if (!piBinary.exists()) {
-            // Fallback: copy from Termux install path if available
-            val termuxPi = File("/data/user/0/com.termux/files/usr/bin/pi")
-            if (termuxPi.exists()) {
-                termuxPi.copyTo(piBinary, overwrite = true)
-                Os.chmod(piBinary.absolutePath, 0b111101101)
-            }
-        }
-        onProgress(RuntimeInstallProgress("Using Pi Agent (local binary)", 0.56f))
-        if (!marker.exists()) {
-            marker.writeText("v0.85.1")
-        }
+        onProgress(RuntimeInstallProgress("Using Pi Agent (bundled binary)", 0.56f))
 
         val version = marker.readText().trim()
 
@@ -223,7 +209,7 @@ class RuntimeInstaller(private val context: Context) {
         }
 
         // The binary and version manifest were already checksum-verified above. Running a
-        // separate `claude --version` probe under PRoot can leave inherited output pipes
+        // separate `pi --version` probe under PRoot can leave inherited output pipes
         // open on some Android kernels, so the real user session is the launch check.
         onProgress(RuntimeInstallProgress("Setup complete", 1f))
         return InstalledRuntime(proot, rootfs, pi, version)
@@ -867,7 +853,6 @@ class RuntimeInstaller(private val context: Context) {
     suspend fun initializeExisting(onProgress: suspend (RuntimeInstallProgress) -> Unit): InstalledRuntime {
         val installed = installedRuntime()
         val proot = installed.proot
-        val claude = installed.claude
         val version = installed.version
         onProgress(RuntimeInstallProgress("Checking private runtime files", 0.15f))
         writeResolver()
@@ -903,7 +888,6 @@ class RuntimeInstaller(private val context: Context) {
         // Self-heal devices whose Android tools were installed by an older app
         // version before the global AAPT2 override was persisted.
         writeAndroidGradleConfiguration(rootfs)
-        ensureWorkspaceTrust(guestWorkspacePath)
         val bridge = File(context.filesDir, "runtime-bridge").apply { mkdirs() }
         val args = buildList {
             add(proot.absolutePath)
@@ -957,7 +941,7 @@ class RuntimeInstaller(private val context: Context) {
                 put("PROOT_NO_SECCOMP", "1")
                 put("PROOT_TMP_DIR", prootTemp.absolutePath)
                 put("PROOT_LOADER", File(context.applicationInfo.nativeLibraryDir, "libprootloader.so").absolutePath)
-                // Also protects any glibc helper Claude starts later.
+                // Also protects any glibc helper Pi starts later.
                 put("GLIBC_TUNABLES", "glibc.pthread.rseq=0")
                 putAll(environment)
             },
@@ -966,78 +950,23 @@ class RuntimeInstaller(private val context: Context) {
         )
     }
 
+    /**
+     * Pi runs trusted by default (no permission gate). Persist that choice so
+     * non-interactive runs never stall on project-trust prompts; the bridge
+     * additionally passes `-a` per run.
+     */
     fun ensureSettingsAndHooks() {
-        val hook = File(rootfs, "opt/pocket/permission-hook.sh")
-        hook.parentFile?.mkdirs()
-        hook.writeText(
-            """#!/bin/sh
-cat > /dev/null
-printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
-""",
-        )
-        Os.chmod(hook.absolutePath, 0b111101101)
-
         val settingsContent = JSONObject()
-            .put("disableAllHooks", false)
-            .put(
-                "permissions",
-                JSONObject()
-                    .put("allow", claudeWorkspaceToolRules())
-                    .put("defaultMode", "acceptEdits"),
-            )
-            .put(
-                "hooks",
-                JSONObject().put(
-                    "PermissionRequest",
-                    org.json.JSONArray().put(
-                        JSONObject()
-                            .put("matcher", "Bash|Edit|Write|NotebookEdit")
-                            .put(
-                                "hooks",
-                                org.json.JSONArray().put(
-                                    JSONObject().put("type", "command").put("command", "/opt/pocket/permission-hook.sh"),
-                                ),
-                            ),
-                    ),
-                ),
-            )
+            .put("defaultProjectTrust", "always")
             .toString()
 
         val settingsPaths = listOf(
-            File(rootfs, "root/.claude/pocket-settings.json"),
-            File(rootfs, "root/.claude/settings.json"),
-            File(rootfs, "etc/claude/settings.json"),
+            File(rootfs, "root/.pi/agent/settings.json"),
         )
         for (target in settingsPaths) {
             target.parentFile?.mkdirs()
             target.writeText(settingsContent)
         }
-        ensureWorkspaceTrust("/workspace")
-    }
-
-    private fun ensureWorkspaceTrust(workspacePath: String) {
-        val stateFile = File(rootfs, "root/.claude.json")
-        val state = runCatching { JSONObject(stateFile.readText()) }.getOrElse { JSONObject() }
-        // Older alpha builds incorrectly wrote settings into Claude's state file.
-        // Keep Claude's generated state, but remove only those stale settings keys.
-        listOf("disableAllHooks", "permissions", "hooks", "allowedTools", "autoApprove")
-            .forEach(state::remove)
-        val projects = state.optJSONObject("projects") ?: JSONObject()
-        val workspace = projects.optJSONObject(workspacePath) ?: JSONObject()
-        workspace.put("hasTrustDialogAccepted", true)
-        projects.put(workspacePath, workspace)
-        state.put("projects", projects)
-        stateFile.writeText(state.toString())
-    }
-
-    private fun claudeWorkspaceToolRules() = org.json.JSONArray().apply {
-        put("Bash")
-        put("Edit")
-        put("Write")
-        put("NotebookEdit")
-        put("Read")
-        put("Glob")
-        put("Grep")
     }
 
     private fun writeResolver() {

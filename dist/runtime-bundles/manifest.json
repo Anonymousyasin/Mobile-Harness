@@ -14,7 +14,7 @@
         "Node.js 24.19.0",
         "npm 11.17.0",
         "Git 2.25.1",
-        "Claude Code 2.1.261 ARM64",
+        "Pi Agent (latest release, bundled)",
         "No optional language stacks"
       ]
     },

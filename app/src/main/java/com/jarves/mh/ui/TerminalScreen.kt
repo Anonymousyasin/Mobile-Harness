@@ -168,7 +168,7 @@ fun TerminalScreen(
         "python3 --version",
         "df -h",
         "free -m",
-        "claude --version",
+        "pi --version",
     )
 
     Scaffold(

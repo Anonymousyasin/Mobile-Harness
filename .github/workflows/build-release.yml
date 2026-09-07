@@ -60,13 +60,17 @@ jobs:
           ls third_party/libandroid-shmem/shmem.c
 
       - name: Download Pi Agent binary (ARM64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p app/src/main/assets/pi/
-          curl -sL "https://github.com/earendil-works/pi/releases/download/v0.85.1/pi-linux-arm64.tar.gz" \
+          PI_TAG=$(gh api repos/earendil-works/pi/releases/latest --jq .tag_name)
+          echo "Pi tag: $PI_TAG"
+          curl -sL "https://github.com/earendil-works/pi/releases/download/${PI_TAG}/pi-linux-arm64.tar.gz" \
             -o /tmp/pi-arm64.tar.gz
           tar -xzf /tmp/pi-arm64.tar.gz -C app/src/main/assets/pi/ --strip-components=1
           ls -la app/src/main/assets/pi/
-          echo "Pi ARM64 binary ready"
+          echo "Pi ARM64 binary ready ($PI_TAG)"
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
@@ -124,13 +128,12 @@ jobs:
             ## Mobile Harness — Pi Agent Edition (ARM32 + ARM64)
 
             ### What's new
-            - **Replaced Claude Code with Pi Agent** — your local `armv7l` Pi binary
+            - **Pi Agent inside** — latest Pi release bundled at build time
             - **True 32-bit ARM support** (armeabi-v7a) alongside arm64-v8a
-            - Ships with Pi v0.85.1 binary bundled
 
             ### Architecture
             - Dual ABI: `armeabi-v7a` (32-bit) + `arm64-v8a` (64-bit)
-            - Pi Agent harness replaces Claude Code CLI
+            - Pi Agent harness (latest release) drives all AI sessions
             - Android 9+ (API 28+)
             - Jetpack Compose UI, Ubuntu 20.04 PRoot layer
 

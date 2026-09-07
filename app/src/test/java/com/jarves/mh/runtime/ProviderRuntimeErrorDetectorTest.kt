@@ -24,6 +24,14 @@ class ProviderRuntimeErrorDetectorTest {
 
     @Test
     fun ordinaryRuntimeOutputIsNotFatal() {
-        assertNull(ProviderRuntimeErrorDetector.detect("Claude Code connected"))
+        assertNull(ProviderRuntimeErrorDetector.detect("Pi Agent connected"))
+    }
+
+    @Test
+    fun piErrorEventIsFatal() {
+        assertEquals(
+            "Pi Agent reported an error. Check the API key and provider account.",
+            ProviderRuntimeErrorDetector.detect("""{"type":"error","reason":"error"}"""),
+        )
     }
 }

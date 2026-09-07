@@ -351,7 +351,7 @@ fun SettingsScreen(
                     expanded = expanded == SettingsSection.TOOLS,
                     onClick = { toggle(SettingsSection.TOOLS) },
                 ) {
-                    Text("Node.js, npm, Git, and Claude Code are included.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Node.js, npm, Git, and the Pi agent are included.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(8.dp))
                     DevStack.entries.forEachIndexed { index, stack ->
                         val installed = stack in state.installedDevStacks
@@ -386,7 +386,7 @@ fun SettingsScreen(
                 ) {
                     RuntimeInfoRow("Architecture", "ARM64 (aarch64)")
                     RuntimeInfoRow("Environment", "Ubuntu 20.04 PRoot")
-                    RuntimeInfoRow("Agent", "Claude Code + Node.js 24")
+                    RuntimeInfoRow("Agent", "Pi Agent + Node.js 24")
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = { onClearTerminal(); terminalCleared = true },

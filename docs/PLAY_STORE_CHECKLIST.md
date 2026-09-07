@@ -1,6 +1,6 @@
 # Google Play release checklist
 
-This checklist covers the Play-facing work for package `com.jarves.mh`. It does not resolve the separate policy and technical review required for the downloadable local Linux and Claude Code runtime.
+This checklist covers the Play-facing work for package `com.jarves.mh`. It does not resolve the separate policy and technical review required for the downloadable local Linux and Pi agent runtime.
 
 ## Implemented in the project
 

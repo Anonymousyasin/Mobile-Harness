@@ -30,9 +30,13 @@ jobs:
           restore-keys: gradle-
 
       - name: Download Pi Agent binary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p app/src/main/assets/pi/
-          curl -sL -o /tmp/pi.tar.gz "https://github.com/earendil-works/pi/releases/download/v0.85.1/pi-linux-arm64.tar.gz"
+          PI_TAG=$(gh api repos/earendil-works/pi/releases/latest --jq .tag_name)
+          echo "Pi tag: $PI_TAG"
+          curl -sL -o /tmp/pi.tar.gz "https://github.com/earendil-works/pi/releases/download/${PI_TAG}/pi-linux-arm64.tar.gz"
           tar -xzf /tmp/pi.tar.gz -C app/src/main/assets/pi/ --strip-components=1 || echo "Extracted"
 
       - name: Build
@@ -80,11 +84,11 @@ jobs:
             --body "## Mobile Harness — Pi Agent Edition
 
 **Build:** ARM32 (armeabi-v7a) + ARM64 (arm64-v8a)
-**Harness:** Pi Agent v0.85.1 (replaces Claude Code)
+**Harness:** Pi Agent (latest release, bundled at build time)
 **Platform:** Android 9+ (API 28+)
 
 ### What's changed
-- Claude Code CLI replaced with Pi Agent (armv7l binary)
+- Pi Agent (latest release) bundled inside; no Claude Code dependency
 - Full 32-bit ARM support via dual ABI build
 - All existing features preserved" \
             --prerelease \

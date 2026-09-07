@@ -36,7 +36,7 @@
     <img src="https://img.youtube.com/vi/QzAau52Z7yQ/maxresdefault.jpg" alt="Mobile Harness Walkthrough and Live Product Demo" width="920" />
   </a>
   <br />
-  <sub>Watch the product walkthrough and demo &nbsp;|&nbsp; <i>Setting up Ubuntu, connecting Claude Code, and building an app on Android</i></sub>
+  <sub>Watch the product walkthrough and demo &nbsp;|&nbsp; <i>Setting up Ubuntu, connecting the Pi agent, and building an app on Android</i></sub>
 </p>
 
 ---
@@ -92,7 +92,7 @@ Mobile Harness unites modern **Jetpack Compose UI** with a self-contained **Ubun
   <tr>
     <td width="50%" valign="top">
       <h3>Autonomous Agent Coding</h3>
-      <p>Native integration with Claude Code CLI. Stream step-by-step reasoning, automated file manipulation, and terminal commands across persistent project sessions.</p>
+      <p>Native integration with the Pi coding agent. Stream step-by-step reasoning, automated file manipulation, and terminal commands across persistent project sessions.</p>
     </td>
     <td width="50%" valign="top">
       <h3>Isolated Linux Subsystem</h3>
@@ -210,7 +210,7 @@ Launch the application and follow the interactive setup wizard:
 
 ## Model Providers
 
-Mobile Harness uses Claude Code's Anthropic-compatible API protocol. You can connect official endpoints or route requests through compatible translation proxies:
+Mobile Harness drives the Pi coding agent (`pi --mode json`) over each provider's native API. You can connect official endpoints or route requests through compatible gateways:
 
 | Provider | Integration Type | Streaming | Tool Calling | Status | Notes |
 | :--- | :---: | :---: | :---: | :---: | :--- |
@@ -242,7 +242,7 @@ flowchart TB
 
     subgraph Subsystem[" Private Linux Subsystem (PRoot ARM64) "]
         Ubuntu["Ubuntu 20.04 LTS Subsystem<br/>Rootless Userspace Environment"]
-        Agent["Claude Code CLI<br/>Autonomous Agent Harness"]
+        Agent["Pi Agent<br/>Autonomous Agent Harness"]
         Tools["Development Toolchains<br/>Node.js • Git • Python • C++"]
         Workspace["Local Project Workspace<br/>Files • Git History • Checkpoints"]
     end
@@ -272,7 +272,7 @@ flowchart TB
 
 ### Core Runtime Components
 * **Base Environment**: Ubuntu 20.04 ARM64 verified rootfs
-* **Agent Engine**: Official Claude Code CLI package distributed directly from Anthropic
+* **Agent Engine**: Pi coding agent binary (latest release, resolved at build time) bundled into the Core runtime
 * **Native Tooling**: Node.js LTS, npm, Git, OpenSSL, curl, and GNU coreutils
 * **Process Virtualization**: PRoot user-space architecture emulation with zero kernel modifications
 
@@ -383,14 +383,14 @@ Mobile-Harness/
 
 * **Zero Cloud Intermediaries**: Mobile Harness connects your device directly to your chosen AI endpoint. No intermediate relays or telemetry servers collect your prompts or code.
 * **Scoped Storage**: Project imports and exports utilize Android's official Storage Access Framework (SAF) instead of broad shared storage access.
-* **Cryptographic Checksums**: Root filesystem archives and Claude Code CLI packages are verified via SHA-256 checksums prior to extraction.
+* **Cryptographic Checksums**: Root filesystem archives and runtime bundles are verified via SHA-256 checksums prior to extraction.
 * **Encrypted Secrets**: API tokens are encrypted in hardware-backed storage via Android Keystore.
 
 - ARM64 phones only
 - No hardened isolation for hostile code
 - Terminal input/output currently uses a process bridge rather than a complete PTY emulator; full-screen interactive programs may render incorrectly
 - Background tasks are subject to Android process and battery policies
-- Custom providers may lack Claude-compatible thinking, tool use, token counting, or streaming behavior
+- Custom providers may lack Pi-compatible thinking, tool use, token counting, or streaming behavior
 - Large builds can be slow and memory-intensive under PRoot
 - Runtime installation requires a substantial download and free storage
 - Project-specific Android libraries may still be downloaded by Gradle when they are not already in the bundled Maven cache
@@ -415,7 +415,7 @@ Mobile Harness is currently intended for signed direct APK distribution and priv
 ## Legal & Trademarks
 
 * Mobile Harness is an independent open-source project and is not affiliated with, endorsed by, or sponsored by Anthropic.
-* **Claude** and **Claude Code** are trademarks of Anthropic, PBC. Claude Code CLI is downloaded directly from Anthropic's official distribution endpoints during setup and remains governed by Anthropic's license terms.
+* **Claude** is a trademark of Anthropic, PBC. The Pi agent is an independent open-source project (Apache/MIT, see its release notes) and is bundled from its official release endpoints during the build.
 * Ubuntu, Android, Kotlin, Node.js, Git, and other registered trademarks belong to their respective copyright holders.
 * Third-party open-source licenses are compiled in [`app/src/main/assets/licenses`](app/src/main/assets/licenses).
 

@@ -7,7 +7,6 @@ import com.jarves.mh.model.ChatMessage
 import com.jarves.mh.model.ChangeItem
 import com.jarves.mh.model.DiffLine
 import com.jarves.mh.model.DiffLineType
-import com.jarves.mh.model.ProviderKind
 import com.jarves.mh.model.ProjectKind
 import com.jarves.mh.model.ProviderProfile
 import com.jarves.mh.model.RiskLevel
@@ -53,12 +52,14 @@ internal object ProviderRuntimeErrorDetector {
                 "http 401" in combined ||
                 (json?.optString("subtype") == "api_retry" && json.optInt("error_status") in listOf(401, 403)) ->
                 "The provider rejected the saved API key."
+            json?.optString("type") == "error" ->
+                "Pi Agent reported an error. Check the API key and provider account."
             else -> null
         }
     }
 }
 
-class ClaudeRuntimeBridge(
+class PiRuntimeBridge(
     private val context: Context,
     private val secretFor: (ProviderProfile) -> String?,
 ) : RuntimeBridge {
@@ -68,6 +69,7 @@ class ClaudeRuntimeBridge(
     private val pending = ConcurrentHashMap<String, PendingPermission>()
     private val toolNames = ConcurrentHashMap<String, String>()
     private val seenToolCalls = ConcurrentHashMap.newKeySet<String>()
+    private val completedToolCalls = ConcurrentHashMap.newKeySet<String>()
     private val finishedSessions = ConcurrentHashMap.newKeySet<String>()
     private val projectRoots = ConcurrentHashMap<String, String>()
     @Volatile private var activeProcess: Process? = null
@@ -101,9 +103,9 @@ class ClaudeRuntimeBridge(
         currentThinkingBlockId = 0L
         streamedThinking.clear()
         eventBus.emit(RuntimeEvent.SessionStarted(sessionId))
-        pushForegroundProgress("Starting Claude Code…")
+        pushForegroundProgress("Starting Pi Agent…")
         val secret = secretFor(provider).orEmpty()
-        if (provider.kind != ProviderKind.CLAUDE && secret.isBlank()) {
+        if (secret.isBlank()) {
             eventBus.emit(RuntimeEvent.SessionFailed(sessionId, "No API key is saved for ${provider.kind.title}."))
             return@withContext sessionId
         }
@@ -135,8 +137,8 @@ class ClaudeRuntimeBridge(
                     com.jarves.mh.model.ProviderProtocol.OPENAI_RESPONSES,
                 )) LocalFormatGateway(provider, secret).start() else null
             val launch = RuntimeLaunchConfigBuilder.build(provider, authToken = secret, localGatewayUrl = formatGateway?.url)
-            Log.d("ClaudeBridge", "Provider: ${provider.kind}, Model: ${provider.model}, BaseUrl: ${provider.baseUrl}")
-            Log.d("ClaudeBridge", "Launch environment keys: ${launch.environment.keys}")
+            Log.d("PiBridge", "Provider: ${provider.kind}, Model: ${provider.model}, BaseUrl: ${provider.baseUrl}")
+            Log.d("PiBridge", "Launch environment keys: ${launch.environment.keys}")
 
             // Build a context-aware prompt that includes conversation history
             val guestWorkspacePath = "/workspace/$projectSlug"
@@ -144,19 +146,16 @@ class ClaudeRuntimeBridge(
 
             val command = buildList {
                 add(launch.executable)
-                add("--bare")
-                add("-p")
+                addAll(launch.arguments)
+                add("--")
                 add(contextPrompt)
-                add("--output-format")
-                add("stream-json")
-                add("--include-partial-messages")
-                add("--verbose")
-                add("--model")
-                add(launch.environment["ANTHROPIC_MODEL"] ?: provider.model)
-                add("--max-turns")
-                add("25")
             }
-            Log.d("ClaudeBridge", "Launching command: $command")
+            // Never log argv verbatim: it carries --api-key. Redact the value
+            // following --api-key and drop the trailing prompt.
+            val safeCommand = command.dropLast(1).mapIndexed { index, arg ->
+                if (index > 0 && command[index - 1] == "--api-key") "••••" else arg
+            }
+            Log.d("PiBridge", "Launching command: $safeCommand + <prompt>")
             val process = installer.process(
                 installed.proot,
                 installed.rootfs,
@@ -193,12 +192,12 @@ class ClaudeRuntimeBridge(
                             val line = pendingOutput.substring(0, newline).trimEnd('\r')
                             pendingOutput.delete(0, newline + 1)
                             if (line.isNotBlank()) {
-                                Log.d("ClaudeBridge", "OUTPUT: $line")
+                                Log.d("PiBridge", "OUTPUT: $line")
                                 ProviderRuntimeErrorDetector.detect(line)?.let { reason ->
                                     process.destroyForcibly()
                                     throw ProviderSessionException(reason)
                                 }
-                                if (!consumeClaudeEvent(sessionId, line)) {
+                                if (!consumePiEvent(sessionId, line)) {
                                     lastDiagnostic = line.takeLast(500)
                                     terminalStatus(line)?.let { (title, detail) ->
                                         eventBus.emit(RuntimeEvent.RuntimeLog(sessionId, title, detail))
@@ -210,11 +209,11 @@ class ClaudeRuntimeBridge(
                     }
                 }
                 pendingOutput.toString().trim().takeIf(String::isNotBlank)?.let { line ->
-                    Log.d("ClaudeBridge", "TRAILING OUTPUT: $line")
-                    if (!consumeClaudeEvent(sessionId, line)) lastDiagnostic = line.takeLast(500)
+                    Log.d("PiBridge", "TRAILING OUTPUT: $line")
+                    if (!consumePiEvent(sessionId, line)) lastDiagnostic = line.takeLast(500)
                 }
                 val exit = process.waitFor()
-                Log.d("ClaudeBridge", "Process exited with code $exit")
+                Log.d("PiBridge", "Process exited with code $exit")
                 permissionWatcher.cancelAndJoin()
                 pending.values.filter { it.request.sessionId == sessionId }.forEach { permission ->
                     permission.response.writeText("deny")
@@ -222,7 +221,7 @@ class ClaudeRuntimeBridge(
                 }
                 val changed = changedFiles(workspace, before)
                 if (changed.isNotEmpty()) {
-                    Log.d("ClaudeBridge", "Changed files: $changed")
+                    Log.d("PiBridge", "Changed files: $changed")
                     saveChangedPaths(projectId, changed)
                     val details = loadPendingChanges(projectId)
                     eventBus.emit(RuntimeEvent.FilesChanged(sessionId, details))
@@ -234,15 +233,15 @@ class ClaudeRuntimeBridge(
                     finishForegroundRuntime(
                         completed = true,
                         projectName = projectSlug,
-                        detail = "Claude Code finished the task in $projectSlug.",
+                        detail = "Pi Agent finished the task in $projectSlug.",
                     )
                 } else {
                     if (userStopRequested) throw ProviderSessionException("Stopped by user")
-                    error(lastDiagnostic.ifBlank { "Claude Code stopped with exit code $exit" })
+                    error(lastDiagnostic.ifBlank { "Pi Agent stopped with exit code $exit" })
                 }
             }
         }.onFailure { error ->
-            Log.e("ClaudeBridge", "Session failed", error)
+            Log.e("PiBridge", "Session failed", error)
             val message = friendlyError(error)
             emitFailureOnce(sessionId, message)
             if (userStopRequested) {
@@ -354,6 +353,11 @@ class ClaudeRuntimeBridge(
         true
     }
 
+    /**
+     * Pi runs trusted with no permission hook, so this watcher is a no-op
+     * safety net: anything dropped into runtime-bridge is auto-allowed so a
+     * session can never stall waiting on an approval that has no UI.
+     */
     private suspend fun watchPermissionRequests(sessionId: String) {
         val bridge = File(context.filesDir, "runtime-bridge")
         while (kotlin.coroutines.coroutineContext.isActive) {
@@ -370,7 +374,7 @@ class ClaudeRuntimeBridge(
                         .ifBlank { command.orEmpty() }
                         .ifBlank { "$toolName running in project" }
 
-                    Log.d("ClaudeBridge", "Auto-approving permission request $approvalId for $toolName ($paths)")
+                    Log.d("PiBridge", "Auto-approving permission request $approvalId for $toolName ($paths)")
                     val response = File(file.parentFile, "$approvalId.response")
                     response.writeText("allow")
 
@@ -383,121 +387,137 @@ class ClaudeRuntimeBridge(
         }
     }
 
-    private suspend fun consumeClaudeEvent(sessionId: String, line: String): Boolean {
+    private suspend fun consumePiEvent(sessionId: String, line: String): Boolean {
         val json = runCatching { JSONObject(line) }.getOrNull() ?: return false
-        consumeClaudeJsonEvent(sessionId, json)
+        consumePiJsonEvent(sessionId, json)
         return true
     }
 
-    private suspend fun consumeClaudeJsonEvent(sessionId: String, json: JSONObject) {
+    /**
+     * Consumes Pi's `--mode json` event stream (see pi docs/json.md).
+     * Terminal event is `agent_end`; per-message errors arrive as
+     * `message_end` with stopReason error/aborted or an `error` update.
+     */
+    private suspend fun consumePiJsonEvent(sessionId: String, json: JSONObject) {
         when (json.optString("type")) {
-            "stream_event" -> json.optJSONObject("event")?.let { consumeClaudeJsonEvent(sessionId, it) }
-            "system" -> when (json.optString("subtype")) {
-                "init" -> Unit
-                "thinking_tokens" -> emitReasoningProgress(sessionId, json.optInt("estimated_tokens"))
-                "permission_denied" -> eventBus.emit(
-                    RuntimeEvent.RuntimeLog(
-                        sessionId,
-                        "Permission denied",
-                        sanitizeForDisplay(json.optString("decision_reason").ifBlank { json.optString("message") }),
-                    ),
-                )
-            }
-            "content_block_start" -> {
-                val block = json.optJSONObject("content_block")
-                when (block?.optString("type")) {
-                    "thinking" -> {
-                        currentThinkingBlockId += 1
-                        streamedThinking.clear()
-                        emitReasoningSummary(sessionId, "", startsNewBlock = true)
-                        block.optString("thinking").takeIf(String::isNotBlank)?.let {
-                            streamedThinking.append(it)
-                            emitReasoningSummary(sessionId, it, force = true)
-                        }
-                    }
-                    "text" -> streamedText.clear()
-                }
-            }
-            "content_block_delta" -> {
-                val delta = json.optJSONObject("delta")
-                when (delta?.optString("type")) {
-                    "thinking_delta" -> delta.optString("thinking").takeIf(String::isNotEmpty)?.let {
-                        streamedThinking.append(it)
-                        emitReasoningSummary(sessionId, streamedThinking.toString())
-                    }
-                    "text_delta", "" -> delta.optString("text").takeIf(String::isNotEmpty)?.let {
+            "session", "agent_start", "turn_start", "message_start",
+            "queue_update", "compaction_start", "compaction_end",
+            -> Unit
+            "message_update" -> {
+                val update = json.optJSONObject("assistantMessageEvent") ?: return
+                when (update.optString("type")) {
+                    "text_delta" -> update.optString("delta").takeIf(String::isNotEmpty)?.let {
                         streamedText.append(it)
                         eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, it))
                     }
+                    "thinking_delta" -> update.optString("delta").takeIf(String::isNotEmpty)?.let {
+                        streamedThinking.append(it)
+                        emitReasoningSummary(sessionId, streamedThinking.toString())
+                    }
+                    "thinking_end" -> update.optString("content").takeIf(String::isNotBlank)?.let {
+                        streamedThinking.clear()
+                        streamedThinking.append(it)
+                        emitReasoningSummary(sessionId, it, force = true, isFinal = true)
+                    }
+                    "toolcall_start" -> {
+                        val id = update.optString("id")
+                        val name = update.optString("toolName", "Tool")
+                        if (id.isNotBlank()) {
+                            if (!seenToolCalls.add(id)) return
+                            toolNames[id] = name
+                        }
+                        val args = update.optJSONObject("args")
+                            ?: update.optJSONObject("arguments")
+                            ?: update.optJSONObject("toolCall")?.optJSONObject("arguments")
+                        emitPiToolStarted(sessionId, id, name, args ?: JSONObject())
+                    }
+                    "toolcall_end" -> {
+                        val toolCall = update.optJSONObject("toolCall") ?: return
+                        val id = toolCall.optString("id")
+                        val name = toolCall.optString("name", "Tool")
+                        if (id.isNotBlank()) {
+                            if (!seenToolCalls.add(id)) return
+                            toolNames[id] = name
+                        }
+                        emitPiToolStarted(sessionId, id, name, toolCall.optJSONObject("arguments") ?: JSONObject())
+                    }
+                    "error" -> {
+                        val message = update.optJSONObject("error")?.optString("errorMessage")
+                            ?: update.optString("error").ifBlank { "Pi Agent reported an error" }
+                        throw IllegalStateException(message)
+                    }
                 }
             }
-            "content_block_stop" -> {
-                if (streamedThinking.isNotBlank()) {
-                    emitReasoningSummary(sessionId, streamedThinking.toString(), force = true, isFinal = true)
-                }
-            }
-            "assistant" -> {
+            "message_end" -> {
                 val message = json.optJSONObject("message") ?: return
-                val content = message.optJSONArray("content") ?: return
-                for (index in 0 until content.length()) {
-                    val block = content.optJSONObject(index) ?: continue
-                    when (block.optString("type")) {
-                        "text" -> if (streamedText.isEmpty()) {
-                            block.optString("text").takeIf(String::isNotBlank)?.let {
-                                eventBus.emit(RuntimeEvent.AssistantDelta(sessionId, it))
-                            }
-                        }
-                        "thinking" -> block.optString("thinking").takeIf(String::isNotBlank)?.let {
-                            if (currentThinkingBlockId == 0L || streamedThinking.toString() != it) {
-                                currentThinkingBlockId += 1
-                                streamedThinking.clear()
-                                streamedThinking.append(it)
-                                emitReasoningSummary(
-                                    sessionId,
-                                    it,
-                                    force = true,
-                                    startsNewBlock = true,
-                                    isFinal = true,
-                                )
-                            }
-                        }
-                        "tool_use" -> emitToolStarted(sessionId, block)
-                    }
-                }
-                streamedText.clear()
-                // Some Anthropic-compatible providers omit Claude Code's final
-                // `result` envelope. An assistant end_turn is still authoritative;
-                // tool_use means the agent must remain active for another turn.
-                if (message.optString("stop_reason") == "end_turn") {
-                    emitCompletedOnce(sessionId)
-                    terminateActiveProcessGracefully()
+                if (message.optString("stopReason") in listOf("error", "aborted")) {
+                    throw IllegalStateException(
+                        message.optString("errorMessage").ifBlank { "Pi Agent reported an error" },
+                    )
                 }
             }
-            "user" -> {
-                val content = json.optJSONObject("message")?.optJSONArray("content") ?: return
-                for (index in 0 until content.length()) {
-                    val block = content.optJSONObject(index) ?: continue
-                    if (block.optString("type") == "tool_result") {
-                        val toolId = block.optString("tool_use_id")
-                        val toolName = toolNames.remove(toolId) ?: "Tool"
-                        val result = block.optString("content")
-                            .ifBlank { if (block.optBoolean("is_error")) "Tool failed" else "Completed successfully" }
-                        eventBus.emit(RuntimeEvent.ToolCompleted(sessionId, toolName, sanitizeForDisplay(result)))
-                    }
+            "tool_execution_start" -> {
+                val id = json.optString("toolCallId")
+                val name = json.optString("toolName", "Tool")
+                if (id.isNotBlank()) {
+                    if (!seenToolCalls.add(id)) return
+                    toolNames[id] = name
+                }
+                emitPiToolStarted(sessionId, id, name, json.optJSONObject("args") ?: JSONObject())
+            }
+            "tool_execution_end" -> {
+                val id = json.optString("toolCallId")
+                val name = json.optString("toolName").ifBlank { toolNames.remove(id) ?: "Tool" }
+                toolNames.remove(id)
+                completedToolCalls.add(id)
+                val result = json.opt("result")?.let { piResultText(it) } ?: "Completed successfully"
+                // A failed tool call is normal agent life, not a session failure:
+                // report it and let Pi continue. Fatal errors arrive as
+                // message_end/error events or a non-zero exit code.
+                val summary = if (json.optBoolean("isError")) "Tool failed: $result" else result
+                eventBus.emit(RuntimeEvent.ToolCompleted(sessionId, name, sanitizeForDisplay(summary)))
+            }
+            "turn_end" -> {
+                // Complete any tool results not already closed by tool_execution_end.
+                val results = json.optJSONArray("toolResults") ?: return
+                for (index in 0 until results.length()) {
+                    val block = results.optJSONObject(index) ?: continue
+                    val id = block.optString("toolCallId")
+                    if (id.isNotBlank() && !completedToolCalls.add(id)) continue
+                    val name = block.optString("toolName").ifBlank { toolNames.remove(id) ?: "Tool" }
+                    toolNames.remove(id)
+                    eventBus.emit(
+                        RuntimeEvent.ToolCompleted(sessionId, name, sanitizeForDisplay(piResultText(block))),
+                    )
                 }
             }
-            "result" -> {
-                if (json.optBoolean("is_error")) {
-                    val message = json.optString("result").ifBlank { "Claude Code reported an error" }
-                    throw IllegalStateException(message)
-                }
-                // The structured result is Claude Code's authoritative terminal event.
+            "agent_end" -> {
+                // The structured agent_end is Pi's authoritative terminal event.
                 // Update the UI immediately instead of waiting for a PRoot/Node wrapper
                 // that may remain alive after the answer has already completed.
                 emitCompletedOnce(sessionId)
                 terminateActiveProcessGracefully()
             }
         }
+    }
+
+    private fun piResultText(value: Any?): String {
+        if (value == null || value == JSONObject.NULL) return "Completed successfully"
+        if (value is JSONObject) {
+            if (value.optBoolean("is_error") || value.optBoolean("isError")) {
+                return value.optString("content").ifBlank { "Tool failed" }
+            }
+            val content = value.optJSONArray("content")
+            if (content != null) {
+                val texts = (0 until content.length()).mapNotNull { content.optJSONObject(it)?.optString("text") }
+                    .filter(String::isNotBlank)
+                if (texts.isNotEmpty()) return texts.joinToString("\n")
+            }
+            return value.optString("content")
+                .ifBlank { value.optString("text") }
+                .ifBlank { "Completed successfully" }
+        }
+        return value.toString().ifBlank { "Completed successfully" }
     }
 
     private suspend fun emitReasoningSummary(
@@ -536,20 +556,16 @@ class ClaudeRuntimeBridge(
         }
     }
 
-    private suspend fun emitToolStarted(sessionId: String, block: JSONObject) {
-        val id = block.optString("id")
-        if (id.isNotBlank() && !seenToolCalls.add(id)) return
-        val name = block.optString("name", "Tool")
-        if (id.isNotBlank()) toolNames[id] = name
-        val input = block.optJSONObject("input") ?: JSONObject()
+    private suspend fun emitPiToolStarted(sessionId: String, id: String, name: String, args: JSONObject) {
         val detail = when (name) {
-            "Bash" -> input.optString("command").ifBlank { input.optString("description") }
-            "Write", "Edit", "Read", "NotebookEdit" -> input.optString("file_path").ifBlank { input.optString("notebook_path") }
-            "Glob" -> input.optString("pattern")
-            "Grep" -> input.optString("pattern").let { pattern ->
-                input.optString("path").takeIf(String::isNotBlank)?.let { "$pattern in $it" } ?: pattern
+            "bash", "Bash" -> args.optString("command").ifBlank { args.optString("description") }
+            "write", "edit", "read", "Write", "Edit", "Read", "NotebookEdit" ->
+                args.optString("path").ifBlank { args.optString("file_path") }.ifBlank { args.optString("notebook_path") }
+            "glob", "Glob" -> args.optString("pattern")
+            "grep", "Grep" -> args.optString("pattern").let { pattern ->
+                args.optString("path").takeIf(String::isNotBlank)?.let { "$pattern in $it" } ?: pattern
             }
-            else -> input.optString("description").ifBlank { "Running $name" }
+            else -> args.optString("description").ifBlank { "Running $name" }
         }
         eventBus.emit(RuntimeEvent.ToolStarted(sessionId, name, sanitizeForDisplay(detail.ifBlank { "Running $name" })))
         pushForegroundProgress("Running $name · ${detail.replace(Regex("\\s+"), " ").trim().take(80).ifBlank { name }}")
@@ -566,7 +582,7 @@ class ClaudeRuntimeBridge(
             finishForegroundRuntime(
                 completed = true,
                 projectName = activeProjectSlug ?: "your project",
-                detail = "Claude Code finished the task.",
+                detail = "Pi Agent finished the task.",
             )
         }
     }
@@ -865,7 +881,9 @@ class ClaudeRuntimeBridge(
 
     private fun isInternalRuntimePath(path: String): Boolean {
         val normalized = path.replace('\\', '/')
-        return normalized == ".claude" || normalized == ".claude.json" || normalized.startsWith(".claude/")
+        // Pi metadata plus legacy Claude metadata from older installs.
+        return normalized == ".pi" || normalized.startsWith(".pi/") ||
+            normalized == ".claude" || normalized == ".claude.json" || normalized.startsWith(".claude/")
     }
 
     private fun digest(file: File): String {
@@ -897,13 +915,13 @@ class ClaudeRuntimeBridge(
             message.contains("user not found", true) -> "User not found. Check the API key and provider account."
             message.contains("checksum", true) -> "Runtime verification failed. Nothing unverified was executed."
             message.contains("HTTP 401", true) || message.contains("authentication", true) -> "The provider rejected the saved API key."
-            message.isBlank() -> "The real Claude Code runtime could not start."
+            message.isBlank() -> "The Pi Agent runtime could not start."
             else -> message.take(500)
         }
     }
 
     /**
-     * Mirrors what Claude Code is doing right now into the foreground-service
+     * Mirrors what Pi Agent is doing right now into the foreground-service
      * notification, so the notification panel shows the real task progress.
      * Throttled because each update is a service round-trip.
      */
@@ -973,7 +991,7 @@ class ClaudeRuntimeBridge(
                     .putExtra(RuntimeExecutionService.EXTRA_DETAIL, detail),
             )
         }.onFailure { error ->
-            Log.w("ClaudeBridge", "Could not post task result notification", error)
+            Log.w("PiBridge", "Could not post task result notification", error)
             context.stopService(android.content.Intent(context, RuntimeExecutionService::class.java))
         }
     }

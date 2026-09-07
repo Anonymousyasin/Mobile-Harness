@@ -367,7 +367,7 @@ private fun BackgroundTaskSetupScreen(
         else -> "Task protection"
     }
     val currentDescription = when (currentStep) {
-        0 -> "See live progress and receive an alert when Claude finishes or needs your attention."
+        0 -> "See live progress and receive an alert when Pi Agent finishes or needs your attention."
         1 -> "Allow Mobile Harness to continue a task when you lock the phone or switch to another app."
         else -> "Keep the CPU awake only while a visible coding task is running, then release it automatically."
     }
@@ -701,7 +701,7 @@ private fun RuntimeSetupPromptScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "Mobile Harness checks compatibility before downloading the private Linux runtime with real Claude Code, Node.js, and Git.",
+                    text = "Mobile Harness checks compatibility before downloading the private Linux runtime with the Pi agent, Node.js, and Git.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.5.sp,
                     lineHeight = 19.sp,
@@ -903,7 +903,7 @@ private fun RuntimeSetupPromptScreen(
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 13.5.sp,
                             )
-                            Text("Claude Code  ·  Node.js  ·  npm  ·  Git", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                            Text("Pi Agent  ·  Node.js  ·  npm  ·  Git", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                         }
                         Icon(Icons.Default.Check, "Included", tint = PocketGreen, modifier = Modifier.size(20.dp))
                     }
@@ -1618,11 +1618,7 @@ private fun ProviderSetupScreen(
                             apiKey = ""
                         }
                     },
-                    onContinue = {
-                        if (selected == ProviderKind.CLAUDE) {
-                            onSave(ProviderProfile(selected), "")
-                        } else step = 2
-                    },
+                    onContinue = { step = 2 },
                 )
                 else -> ProviderCredentialsStep(
                     provider = selected,
@@ -1792,7 +1788,6 @@ private fun ProviderChoiceRow(
     onClick: () -> Unit,
 ) {
     val accent = when (provider) {
-        ProviderKind.CLAUDE -> Color(0xFFD97757)
         ProviderKind.ANTHROPIC -> Color(0xFFE7A26D)
         ProviderKind.LLM_ROUTER -> Color(0xFF5B8DEF)
         ProviderKind.DEEPSEEK -> Color(0xFF4D6BFE)
@@ -1800,7 +1795,6 @@ private fun ProviderChoiceRow(
         ProviderKind.CUSTOM -> PocketOrange
     }
     val mark = when (provider) {
-        ProviderKind.CLAUDE -> "C"
         ProviderKind.ANTHROPIC -> "A"
         ProviderKind.LLM_ROUTER -> "OR"
         ProviderKind.DEEPSEEK -> "DS"
@@ -2035,8 +2029,8 @@ private fun ProviderCredentialsStep(
             Text(provider.title, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(5.dp))
             Text(
-                if (provider.protocol.name.startsWith("OPENAI")) "Mobile Harness will translate Claude Code requests for this provider."
-                else "Claude Code will connect through this API endpoint.",
+                if (provider.protocol.name.startsWith("OPENAI")) "Mobile Harness will translate Pi Agent requests for this provider."
+                else "Pi Agent will connect through this API endpoint.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -2109,7 +2103,7 @@ private fun ProviderCredentialsStep(
                     onClick = {
                         scope.launch {
                             isValidating = true
-                            status = "Checking API key, model, and Claude Code settings…"
+                            status = "Checking API key, model, and Pi Agent settings…"
                             statusOk = true
                             when (val result = onValidate(models)) {
                                 is ConnectionValidation.Success -> {
@@ -3065,7 +3059,7 @@ private fun FilesTab(
             }
         }
         if (!loading && files.isEmpty()) {
-            item { EmptyState(Icons.Default.Folder, "No files yet", "Ask Claude Code to create something in this project.") }
+            item { EmptyState(Icons.Default.Folder, "No files yet", "Ask Pi Agent to create something in this project.") }
         }
         items(visibleFiles, key = { it.path }) { entry ->
             Row(
@@ -3145,7 +3139,7 @@ private fun ChatTab(
     onRunInTerminal: (String) -> Unit,
 ) {
     val view = LocalView.current
-    // Keep the screen on while Claude is working in this chat. Released automatically
+    // Keep the screen on while Pi Agent is working in this chat. Released automatically
     // when the task finishes or the user leaves the chat tab.
     DisposableEffect(isRunning) {
         view.keepScreenOn = isRunning
@@ -3175,8 +3169,8 @@ private fun ChatTab(
                     }
                 }
                 if (liveProcess.isNotEmpty() || thinkingActive) {
-                    item(key = "live-claude-process") {
-                        LiveClaudeProcess(
+                    item(key = "live-pi-process") {
+                        LiveAgentProcess(
                             processItems = liveProcess,
                             isRunning = isRunning,
                             startedAtMillis = taskStartedAtMillis,
@@ -3299,7 +3293,7 @@ private fun ChatTab(
                                 Box(contentAlignment = Alignment.CenterStart) {
                                     if (prompt.isEmpty()) {
                                         Text(
-                                            text = "Message Claude…",
+                                            text = "Message Pi Agent…",
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             fontSize = 15.sp,
                                         )
@@ -3364,7 +3358,7 @@ private fun ChatTab(
 }
 
 @Composable
-private fun LiveClaudeProcess(
+private fun LiveAgentProcess(
     processItems: List<ActivityItem>,
     isRunning: Boolean,
     startedAtMillis: Long?,
@@ -3372,7 +3366,7 @@ private fun LiveClaudeProcess(
     thinkingActive: Boolean,
 ) {
     val elapsedSeconds = startedAtMillis?.let { rememberLiveElapsedSeconds(it).toLong() } ?: 0L
-    ClaudeActivityDisclosure(
+    AgentActivityDisclosure(
         items = processItems,
         headline = activityHeadline(processItems, elapsedSeconds, thinkingActive),
         isRunning = isRunning,
@@ -3382,14 +3376,14 @@ private fun LiveClaudeProcess(
 @Composable
 private fun WorkBlockCard(message: ChatMessage) {
     val seconds = (message.workedMillis / 1_000L).coerceAtLeast(1L)
-    ClaudeActivityDisclosure(
+    AgentActivityDisclosure(
         items = message.workItems,
         headline = activityHeadline(message.workItems, seconds, message.workItems.isEmpty()),
     )
 }
 
 @Composable
-private fun ClaudeActivityDisclosure(
+private fun AgentActivityDisclosure(
     items: List<ActivityItem>,
     headline: String,
     isRunning: Boolean = false,
@@ -3788,7 +3782,7 @@ private fun FilesTab(files: List<WorkspaceEntry>, loading: Boolean, onRefresh: (
             Spacer(Modifier.height(8.dp))
         }
         if (!loading && files.isEmpty()) {
-            item { EmptyState(Icons.Default.Folder, "No files yet", "Ask Claude Code to create something in this project.") }
+            item { EmptyState(Icons.Default.Folder, "No files yet", "Ask Pi Agent to create something in this project.") }
         }
         items(files, key = { it.path }) { entry ->
             Row(
