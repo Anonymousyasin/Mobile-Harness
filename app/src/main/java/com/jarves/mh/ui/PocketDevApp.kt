@@ -636,8 +636,10 @@ private fun RuntimeSetupPromptScreen(
     val activityManager = context.getSystemService(ActivityManager::class.java)
     val memoryInfo = remember { ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo) }
     val totalRamGb = memoryInfo.totalMem / 1_073_741_824L
-    val arm64 = Build.SUPPORTED_64_BIT_ABIS.any { it == "arm64-v8a" }
-    val compatible = arm64 && totalRamGb >= 4
+    val isArm64 = Build.SUPPORTED_64_BIT_ABIS.any { it == "arm64-v8a" }
+    val isArm32 = Build.SUPPORTED_ABIS.any { it == "armeabi-v7a" }
+    val armSupported = isArm64 || isArm32
+    val compatible = armSupported && totalRamGb >= 1
 
     var currentStep by remember { mutableIntStateOf(0) }
     val setupScrollState = rememberScrollState()
@@ -763,7 +765,7 @@ private fun RuntimeSetupPromptScreen(
                             icon = Icons.Default.Code,
                             label = "Processor",
                             value = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a",
-                            statusOk = arm64,
+                            statusOk = armSupported,
                         )
 
                         SpecRow(
@@ -1657,14 +1659,16 @@ private fun DeviceCheckStep(context: Context, onContinue: () -> Unit) {
     val activityManager = context.getSystemService(ActivityManager::class.java)
     val memoryInfo = remember { ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo) }
     val totalRamGb = memoryInfo.totalMem / 1_073_741_824L
-    val arm64 = Build.SUPPORTED_64_BIT_ABIS.any { it == "arm64-v8a" }
-    val compatible = arm64 && totalRamGb >= 4
+    val isArm64 = Build.SUPPORTED_64_BIT_ABIS.any { it == "arm64-v8a" }
+    val isArm32 = Build.SUPPORTED_ABIS.any { it == "armeabi-v7a" }
+    val armSupported = isArm64 || isArm32
+    val compatible = armSupported && totalRamGb >= 1
     Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
         BrandMark()
         Text("Your phone is the workspace", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text("Mobile Harness checks compatibility before downloading the private Linux runtime.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         CheckRow(Icons.Default.Memory, "Memory", "$totalRamGb GB · ${if (totalRamGb >= 8) "Full mode" else "Lite mode"}", totalRamGb >= 4)
-        CheckRow(Icons.Default.Code, "Processor", Build.SUPPORTED_ABIS.firstOrNull() ?: "Unknown", arm64)
+        CheckRow(Icons.Default.Code, "Processor", Build.SUPPORTED_ABIS.firstOrNull() ?: "Unknown", armSupported)
         CheckRow(Icons.Default.Storage, "Android", "Android ${Build.VERSION.RELEASE}", true)
         Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(16.dp)) {
             Text(
