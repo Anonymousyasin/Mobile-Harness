@@ -498,7 +498,7 @@ class RuntimeInstaller(private val context: Context) {
         if (target.isFile && target.length() >= PI_MIN_BYTES) return
         val tag = runCatching {
             JSONObject(fetchText(PI_RELEASE_API)).optString("tag_name")
-        }.getOrNull().takeIf { it.matches(Regex("v?[0-9]+\\.[0-9]+\\.[0-9]+.*")) } ?: PI_FALLBACK_TAG
+        }.getOrNull()?.takeIf { it.matches(Regex("v?[0-9]+\\.[0-9]+\\.[0-9]+.*")) } ?: PI_FALLBACK_TAG
         val version = Regex("[0-9]+\\.[0-9]+\\.[0-9]+").find(tag)?.value
             ?: error("Pi Agent release tag not recognized: $tag")
         val url = "https://github.com/earendil-works/pi/releases/download/$tag/pi-linux-arm64.tar.gz"
