@@ -495,7 +495,11 @@ class RuntimeInstaller(private val context: Context) {
         onProgress: suspend (RuntimeInstallProgress) -> Unit,
     ) {
         val target = File(rootfs, "usr/bin/pi")
-        if (target.isFile && target.length() >= PI_MIN_BYTES) return
+        val proot = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+        // Size alone can't prove the binary: some bundles ship a bogus pi
+        // (e.g. reporting 0.0.0). Only skip when it actually runs as Pi.
+        if (target.isFile && target.length() >= PI_MIN_BYTES && proot.canExecute() && probePiGuest(proot)) return
+        runCatching { target.delete() }
         val tag = runCatching {
             JSONObject(fetchText(PI_RELEASE_API)).optString("tag_name")
         }.getOrNull()?.takeIf { it.matches(Regex("v?[0-9]+\\.[0-9]+\\.[0-9]+.*")) } ?: PI_FALLBACK_TAG
@@ -511,6 +515,8 @@ class RuntimeInstaller(private val context: Context) {
             }
             onProgress(RuntimeInstallProgress("Installing Pi Agent $version", to, indeterminate = true))
             extractPiBinary(archive, target)
+            val prootLib = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+            check(prootLib.canExecute() && probePiGuest(prootLib)) { "Downloaded Pi Agent failed its launch check, retry setup" }
             bundledPiMarker.writeText(version)
         } finally {
             runCatching { archive.delete() }
@@ -553,6 +559,26 @@ class RuntimeInstaller(private val context: Context) {
         }
         destination.delete()
         check(temporary.renameTo(destination)) { "Could not finish Pi Agent download" }
+    }
+
+    /**
+     * Functional check that usr/bin/pi actually runs as the Pi CLI under
+     * PRoot. Deliberately checks `--help` markers instead of the version
+     * string: some binaries report 0.0.0 yet work fine.
+     */
+    private suspend fun probePiGuest(proot: File, timeoutMs: Long = 45_000L): Boolean {
+        return try {
+            withTimeout(timeoutMs) {
+                val probe = process(proot, rootfs, File(rootfs, "root"), emptyMap(), listOf("/usr/bin/pi", "--help"))
+                while (probe.isAlive) delay(100)
+                val exit = probe.waitFor()
+                val output = (probe as? NativeSpawnProcess)?.outputFile?.readText().orEmpty()
+                exit == 0 && "--mode" in output && "--provider" in output
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("RuntimeInstaller", "Pi agent probe failed: ${e.message}")
+            false
+        }
     }
 
     private fun extractPiBinary(archive: File, target: File) {
@@ -955,14 +981,16 @@ class RuntimeInstaller(private val context: Context) {
         ensureSettingsAndHooks()
         File(context.filesDir, "runtime-bridge").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
         onProgress(RuntimeInstallProgress("Preparing the Android runtime bridge", 0.42f))
-        val probe = process(proot, rootfs, File(rootfs, "root"), emptyMap(), listOf("/usr/bin/pi", "--version"))
         onProgress(RuntimeInstallProgress("Starting Pi Agent $version", 0.68f))
-        withTimeout(20_000) {
-            while (probe.isAlive) delay(50)
+        if (!probePiGuest(proot)) {
+            // Bogus or stale pi binary (e.g. pre-Pi bundles): drop it plus
+            // the version markers and run full setup to fetch a verified copy.
+            onProgress(RuntimeInstallProgress("Repairing Pi Agent", 0.10f))
+            File(rootfs, "usr/bin/pi").delete()
+            bundledPiMarker.delete()
+            marker.delete()
+            return ensureInstalled(onProgress = onProgress)
         }
-        val exit = probe.waitFor()
-        val output = (probe as? NativeSpawnProcess)?.outputFile?.readText().orEmpty().trim()
-        check(exit == 0) { output.ifBlank { "Pi Agent initialization failed (exit $exit)" } }
         onProgress(RuntimeInstallProgress("Pi Agent is ready", 1f))
         return installed
     }
