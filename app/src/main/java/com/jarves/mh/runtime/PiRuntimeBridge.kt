@@ -654,15 +654,27 @@ class PiRuntimeBridge(
     }
 
     private fun buildContextPrompt(currentPrompt: String, history: List<ChatMessage>, guestWorkspacePath: String, projectKind: ProjectKind): String {
-        // Filter out the current prompt (last user message), system greeting, and any error messages
-        val priorMessages = history
+        // Filter out the current prompt (last user message), system greeting, and any error messages.
+        // Also strip scaffolding a model may have echoed back into its own
+        // replies: without this, prior embedded contexts get re-embedded
+        // every turn and the prompt grows exponentially.
+        val priorMessages = boundHistory(history
+            .map { msg ->
+                if (!msg.fromUser) {
+                    val cut = listOf("<project_workspace>", "<conversation_history>")
+                        .mapNotNull { marker -> msg.text.indexOf(marker).takeIf { it >= 0 } }
+                        .minOrNull()
+                    if (cut != null) msg.copy(text = msg.text.substring(0, cut).trim()) else msg
+                } else msg
+            }
             .filter { msg ->
+                msg.text.isNotBlank() &&
                 (msg.fromUser || !msg.text.startsWith("Hi! Tell me")) &&
                 !msg.text.startsWith("Failed to") &&
                 !msg.text.startsWith("Error:") &&
                 !msg.text.contains("API Error")
             }
-            .dropLast(1) // Drop the current prompt which was just added
+            .dropLast(1)) // Drop the current prompt which was just added
 
         val sb = StringBuilder()
         sb.appendLine("<project_workspace>")
@@ -706,6 +718,23 @@ class PiRuntimeBridge(
         sb.appendLine("Now, respond to this new message from the user:")
         sb.appendLine(currentPrompt)
         return sb.toString()
+    }
+
+    /**
+     * Bounds conversation history sent with each stateless call: newest
+     * messages win, oldest are dropped first. Keeps prompts small, cheap,
+     * and free of ancient echoes.
+     */
+    private fun boundHistory(messages: List<ChatMessage>): List<ChatMessage> {
+        val capped = messages.takeLast(MAX_HISTORY_MESSAGES)
+        var used = 0
+        val kept = mutableListOf<ChatMessage>()
+        for (msg in capped.asReversed()) {
+            if (used + msg.text.length > MAX_HISTORY_CHARS && kept.isNotEmpty()) break
+            kept.add(msg)
+            used += msg.text.length
+        }
+        return kept.reversed()
     }
 
     private fun ensureWorkspace(projectId: String): File {
@@ -1059,5 +1088,7 @@ class PiRuntimeBridge(
         private const val MAX_RENDERED_DIFF_LINES = 600
         private const val DIFF_CONTEXT_LINES = 3
         private const val FOREGROUND_PROGRESS_MIN_INTERVAL_MS = 750L
+        private const val MAX_HISTORY_MESSAGES = 20
+        private const val MAX_HISTORY_CHARS = 8_000
     }
 }
