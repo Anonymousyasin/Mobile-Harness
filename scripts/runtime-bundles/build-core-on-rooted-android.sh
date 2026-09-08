@@ -32,8 +32,8 @@ printf '%s  %s\n' "$ROOTFS_SHA256" "$temp_dir/$ROOTFS_FILE" | shasum -a 256 -c -
 adb_cmd push "$temp_dir/$ROOTFS_FILE" /data/local/tmp/"$ROOTFS_FILE"
 curl -fL --retry 3 -o "$temp_dir/pi.tar.gz" "https://github.com/earendil-works/pi/releases/download/$PI_VERSION/pi-linux-arm64.tar.gz"
 echo "Pi agent version: $PI_VERSION ($PI_VERSION_NUMBER)"
-tar -xzf "$temp_dir/pi.tar.gz" -C "$temp_dir" pi/pi
-adb_cmd push "$temp_dir/pi/pi" /data/local/tmp/pocketdev-pi
+tar -xzf "$temp_dir/pi.tar.gz" -C "$temp_dir"
+adb_cmd push "$temp_dir/pi" /data/local/tmp/pocketdev-pi-tree
 
 adb_cmd shell "su -c 'rm -rf $REMOTE; mkdir -p $REMOTE/rootfs $REMOTE/output; toybox tar -xzf /data/local/tmp/$ROOTFS_FILE -C $REMOTE/rootfs; rm -f /data/local/tmp/$ROOTFS_FILE'"
 adb_cmd shell "su -c 'mount --bind /dev $REMOTE/rootfs/dev; mount -t proc proc $REMOTE/rootfs/proc; mount -t sysfs sysfs $REMOTE/rootfs/sys'"
@@ -46,7 +46,9 @@ guest() {
 guest "printf 'nameserver $DNS_SERVER\\n' > /etc/resolv.conf; apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade"
 guest "DEBIAN_FRONTEND=noninteractive apt-get install -y git ca-certificates curl wget unzip zip xz-utils zstd"
 guest "set -e; NODE_VERSION=v24.19.0; NODE_FILE=node-\\${NODE_VERSION}-linux-arm64.tar.gz; cd /tmp; curl -fsSLO https://nodejs.org/dist/\\${NODE_VERSION}/\\${NODE_FILE}; curl -fsSL https://nodejs.org/dist/\\${NODE_VERSION}/SHASUMS256.txt | grep \\\"  \\${NODE_FILE}\\\" | sha256sum -c -; mkdir -p /usr/local/lib/nodejs; tar -xzf \\${NODE_FILE} -C /usr/local/lib/nodejs; ln -sfn /usr/local/lib/nodejs/node-\\${NODE_VERSION} /usr/local/lib/nodejs/current; ln -sfn /usr/local/lib/nodejs/current/bin/node /usr/local/bin/node; ln -sfn /usr/local/lib/nodejs/current/bin/npm /usr/local/bin/npm; ln -sfn /usr/local/lib/nodejs/current/bin/npx /usr/local/bin/npx; rm -f /tmp/\\${NODE_FILE}"
-adb_cmd shell "su -c 'cp /data/local/tmp/pocketdev-pi $REMOTE/rootfs/usr/bin/pi; chmod 0755 $REMOTE/rootfs/usr/bin/pi; echo $PI_VERSION_NUMBER > $REMOTE/rootfs/.pocket-bundled-pi-version; echo $PI_VERSION_NUMBER > $REMOTE/rootfs/.pocket-runtime-ready; rm -f /data/local/tmp/pocketdev-pi'"
+# Pi resolves sibling assets (theme/, wasm, export-html/) next to the
+# executable: install the whole release tree, not just the binary.
+adb_cmd shell "su -c 'cp /data/local/tmp/pocketdev-pi-tree/pi /data/local/tmp/pocketdev-pi-tree/package.json /data/local/tmp/pocketdev-pi-tree/photon_rs_bg.wasm $REMOTE/rootfs/usr/bin/; rm -rf $REMOTE/rootfs/usr/bin/theme $REMOTE/rootfs/usr/bin/export-html; cp -r /data/local/tmp/pocketdev-pi-tree/theme /data/local/tmp/pocketdev-pi-tree/export-html $REMOTE/rootfs/usr/bin/; chmod 0755 $REMOTE/rootfs/usr/bin/pi; echo $PI_VERSION_NUMBER > $REMOTE/rootfs/.pocket-bundled-pi-version; echo $PI_VERSION_NUMBER > $REMOTE/rootfs/.pocket-runtime-ready; rm -rf /data/local/tmp/pocketdev-pi-tree'"
 guest "apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/* /var/tmp/*"
 
 guest "mkdir -p /workspace /opt/pocketdev /root/.gradle/init.d; printf 'ubuntu-20.04.5-arm64\\n' > /.pocket-rootfs-version; printf 'core-bundle-$VERSION\\n' > /.pocket-core-tools-version; printf 'ubuntu-maintenance-v1\\n' > /.pocket-system-upgrade-version; printf '{\\\"WEB\\\":true,\\\"PYTHON\\\":false,\\\"CPP\\\":false,\\\"PHP\\\":false,\\\"ANDROID\\\":false}\\n' > /.pocket-dev-stacks.json"

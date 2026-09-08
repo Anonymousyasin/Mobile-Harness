@@ -499,7 +499,13 @@ class RuntimeInstaller(private val context: Context) {
         // Size alone can't prove the binary: some bundles ship a bogus pi
         // (e.g. reporting 0.0.0). Only skip when it actually runs as Pi.
         if (target.isFile && target.length() >= PI_MIN_BYTES && proot.canExecute() && probePiGuest(proot)) return
+        // Clear any partial install (lone binary, half-written theme dir)
+        // so the fresh tree below is complete.
         runCatching { target.delete() }
+        runCatching { File(rootfs, "usr/bin/theme").deleteRecursively() }
+        runCatching { File(rootfs, "usr/bin/export-html").deleteRecursively() }
+        runCatching { File(rootfs, "usr/bin/photon_rs_bg.wasm").delete() }
+        runCatching { File(rootfs, "usr/bin/package.json").delete() }
         val tag = runCatching {
             JSONObject(fetchText(PI_RELEASE_API)).optString("tag_name")
         }.getOrNull()?.takeIf { it.matches(Regex("v?[0-9]+\\.[0-9]+\\.[0-9]+.*")) } ?: PI_FALLBACK_TAG
@@ -563,10 +569,15 @@ class RuntimeInstaller(private val context: Context) {
 
     /**
      * Functional check that usr/bin/pi actually runs as the Pi CLI under
-     * PRoot. Deliberately checks `--help` markers instead of the version
-     * string: some binaries report 0.0.0 yet work fine.
+     * PRoot *with its sibling assets*. Deliberately checks `--help` markers
+     * instead of the version string (some binaries report 0.0.0 yet work),
+     * plus the theme files Pi resolves next to the executable — a lone
+     * binary crashes with ENOENT on theme/dark.json.
      */
     private suspend fun probePiGuest(proot: File, timeoutMs: Long = 45_000L): Boolean {
+        if (!File(rootfs, "usr/bin/theme/dark.json").isFile ||
+            !File(rootfs, "usr/bin/theme/light.json").isFile
+        ) return false
         return try {
             withTimeout(timeoutMs) {
                 val probe = process(proot, rootfs, File(rootfs, "root"), emptyMap(), listOf("/usr/bin/pi", "--help"))
@@ -583,23 +594,41 @@ class RuntimeInstaller(private val context: Context) {
 
     private fun extractPiBinary(archive: File, target: File) {
         require(archive.isFile && archive.length() > PI_MIN_BYTES) { "Pi Agent download looks truncated, retry setup" }
-        TarArchiveInputStream(GzipCompressorInputStream(BufferedInputStream(archive.inputStream()))).use { tar ->
-            var entry = tar.nextEntry
-            while (entry != null) {
-                val name = entry.name.removePrefix("./")
-                if (!entry.isDirectory && (name == PI_TARBALL_ENTRY || (name.endsWith("/pi") && entry.size >= PI_MIN_BYTES))) {
-                    target.parentFile?.mkdirs()
-                    val staging = File(target.parentFile, "${target.name}.installing")
-                    FileOutputStream(staging).use { output -> tar.copyTo(output) }
-                    require(staging.length() >= PI_MIN_BYTES) { "Pi Agent binary looks truncated, retry setup" }
-                    check(staging.renameTo(target)) { "Could not install Pi Agent" }
-                    Os.chmod(target.absolutePath, 0b111101101)
-                    return
+        // Pi resolves sibling assets (theme/, photon wasm, export-html/)
+        // relative to the executable, so install the whole release tree
+        // next to the binary — a lone binary crashes with ENOENT on theme/.
+        val staging = File(downloads, "pi-tree").apply { deleteRecursively(); mkdirs() }
+        try {
+            TarArchiveInputStream(GzipCompressorInputStream(BufferedInputStream(archive.inputStream()))).use { tar ->
+                var entry = tar.nextEntry
+                while (entry != null) {
+                    val name = entry.name.removePrefix("./")
+                    if (!entry.isDirectory && name.startsWith("pi/")) {
+                        val rel = name.removePrefix("pi/")
+                        if (rel.isNotBlank() && !rel.startsWith("docs/") && !rel.startsWith("examples/") && rel != "CHANGELOG.md") {
+                            val out = safeChild(staging, rel)
+                            out.parentFile?.mkdirs()
+                            FileOutputStream(out).use { output -> tar.copyTo(output) }
+                        }
+                    }
+                    entry = tar.nextEntry
                 }
-                entry = tar.nextEntry
             }
+            val binary = File(staging, "pi")
+            require(binary.isFile && binary.length() >= PI_MIN_BYTES) { "Pi Agent binary missing from release archive" }
+            staging.walkTopDown().filter { it.isFile }.forEach { src ->
+                val rel = src.relativeTo(staging).invariantSeparatorsPath
+                val dest = File(target.parentFile, rel)
+                dest.parentFile?.mkdirs()
+                val tmp = File(dest.parentFile, "${dest.name}.installing")
+                src.copyTo(tmp, overwrite = true)
+                check(tmp.renameTo(dest)) { "Could not install Pi Agent ($rel)" }
+            }
+            Os.chmod(target.absolutePath, 0b111101101)
+            require(target.length() >= PI_MIN_BYTES) { "Pi Agent binary looks truncated, retry setup" }
+        } finally {
+            runCatching { staging.deleteRecursively() }
         }
-        error("Pi Agent binary not found in release archive")
     }
 
     private fun extractZipArchive(archive: File, destination: File) {
@@ -1343,7 +1372,6 @@ class RuntimeInstaller(private val context: Context) {
         private val PI_VERSION_PATTERN = Regex("[0-9]+\\.[0-9]+\\.[0-9]+")
         private const val PI_RELEASE_API = "https://api.github.com/repos/earendil-works/pi/releases/latest"
         private const val PI_FALLBACK_TAG = "v0.85.1"
-        private const val PI_TARBALL_ENTRY = "pi/pi"
         private const val PI_MIN_BYTES = 5_000_000L
         private val CORE_BUNDLE = RuntimeBundle(
             label = "Core",
